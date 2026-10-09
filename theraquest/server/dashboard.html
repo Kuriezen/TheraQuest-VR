@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TheraQuest Therapist Monitor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+:root{
+  --bg:#EDF2F0; --surface:#FFFFFF; --surface-2:#F5F8F7; --ink:#10282B; --muted:#56706E; --line:#D3DEDB;
+  --accent:#0B8A7C; --accent-ink:#FFFFFF; --gold:#B57A00;
+  --good:#1C8F52; --good-soft:#D7F1E2; --warn:#B87300; --warn-soft:#FBEAC8; --bad:#BE3B31; --bad-soft:#F8DCD9;
+  --f-display:"Chakra Petch","Segoe UI",system-ui,sans-serif; --f-body:"Figtree","Segoe UI",system-ui,sans-serif; --f-mono:"JetBrains Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0B1618; --surface:#122326; --surface-2:#0F1E21; --ink:#E1EEEC; --muted:#8EA7A4; --line:#23393D;
+  --accent:#2FC2AE; --accent-ink:#04211E; --gold:#F0B43C;
+  --good:#45CC85; --good-soft:#123323; --warn:#F0B43C; --warn-soft:#3A2D10; --bad:#F2695D; --bad-soft:#3B1916; color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-body)}
+.wrap{max-width:1200px;margin:0 auto;padding:20px}
+h1,h2,h3{font-family:var(--f-display);margin:0;font-weight:600}
+.label{font-family:var(--f-display);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.top{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.top h1{font-size:26px}
+select,input[type=number]{font:inherit;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:6px}
+input[type=number]{width:100%;font-family:var(--f-mono);font-size:13px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px}
+.grid{display:grid;gap:16px}
+.kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:760px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.kpi .v{font-family:var(--f-display);font-size:30px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:12.5px;color:var(--muted)}
+.cal{display:grid;grid-template-columns:repeat(14,minmax(0,1fr));gap:5px;margin-top:10px}
+@media (max-width:620px){.cal{grid-template-columns:repeat(7,minmax(0,1fr))}}
+.day{border-radius:7px;padding:6px 2px;text-align:center;border:1px solid var(--line);background:var(--surface-2);font-size:11px;line-height:1.2}
+.day b{display:block;font-family:var(--f-display);font-size:15px}
+.day.complete{background:var(--good-soft);border-color:var(--good);color:var(--good)}
+.day.incomplete{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+.day.missed{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
+.day.pending{border-style:dashed;border-color:var(--accent)}
+.day.rest{opacity:.55}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px}
+.pill.complete{background:var(--good-soft);color:var(--good)} .pill.incomplete{background:var(--warn-soft);color:var(--warn)} .pill.missed{background:var(--bad-soft);color:var(--bad)}
+.two{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);align-items:start}
+@media (max-width:920px){.two{grid-template-columns:1fr}}
+.head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.hint{font-size:12.5px;color:var(--muted)}
+.chart svg{width:100%;height:auto;display:block}
+.chart text{fill:var(--muted);font-family:var(--f-mono);font-size:10px}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-family:var(--f-display);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:8px;border-bottom:1px solid var(--line)}
+td{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;white-space:nowrap}
+.rxrow{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:12px}
+.rxrow .nm{display:flex;justify-content:space-between;gap:8px;font-weight:600;font-size:14px;margin-bottom:6px}
+.rxfields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.rxfields label{font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:3px}
+.rxfields select{padding:5px;font-size:13px}
+.add{display:flex;gap:8px;margin-bottom:14px}
+.add select{flex:1;min-width:0}
+.btn.ghost{background:transparent;color:var(--accent)}
+.link{font:inherit;font-size:12.5px;background:none;border:0;color:var(--bad);cursor:pointer;padding:0}
+.phase{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start}
+@media (max-width:820px){.phase{grid-template-columns:1fr}}
+.phase dl{margin:8px 0 0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13.5px}
+.phase dt{color:var(--muted)}
+.phase dd{margin:0}
+.crit{list-style:none;padding:0;margin:8px 0 12px;font-size:13.5px}
+.crit li{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--line)}
+.crit .mk{font-weight:700;width:16px;flex:none}
+.crit .ok{color:var(--good)} .crit .no{color:var(--muted)}
+.suggest{border:1px solid var(--good);background:var(--good-soft);color:var(--ink);border-radius:8px;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.suggest b{color:var(--good);font-family:var(--f-display);font-size:16px}
+.assign{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.assign select{flex:1;min-width:140px}
+.hist{font-size:12.5px;color:var(--muted);margin:10px 0 0;padding-left:16px}
+.painup{color:var(--bad);font-weight:600}
+.days{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 12px}
+.days label{display:inline-flex;gap:4px;align-items:center;font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2)}
+.btn{font:inherit;font-weight:600;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);padding:8px 14px;border-radius:8px;cursor:pointer}
+.err{background:var(--bad-soft);color:var(--bad);padding:10px 14px;border-radius:8px;margin-bottom:12px}
+.mono{font-family:var(--f-mono)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="label">TheraQuest · Therapist monitor</div><h1 id="title">Adherence monitor</h1></div>
+    <label class="hint">Patient <select id="patientSel"></select></label>
+  </div>
+  <div id="err" class="err" hidden></div>
+
+  <div class="grid kpis">
+    <div class="panel kpi"><div class="label">Adherence · 14 days</div><div class="v" id="kAdh">–</div><div class="s" id="kAdhS"></div></div>
+    <div class="panel kpi"><div class="label">Avg movement accuracy</div><div class="v" id="kAcc">–</div><div class="s" id="kAccS"></div></div>
+    <div class="panel kpi"><div class="label">Current streak</div><div class="v" id="kStreak">–</div><div class="s">completed scheduled days in a row</div></div>
+    <div class="panel kpi"><div class="label">Level · XP</div><div class="v" id="kLvl">–</div><div class="s" id="kLvlS"></div></div>
+  </div>
+
+  <div class="panel grid phase" style="margin-top:16px">
+    <div>
+      <div class="head"><h3>Protocol &amp; phase</h3></div>
+      <div id="phaseInfo"></div>
+      <div class="assign">
+        <select id="protoSel"></select><select id="phaseSel"></select>
+        <button class="btn ghost" type="button" id="assignBtn">Assign phase</button>
+      </div>
+      <p class="hint">Assigning a phase replaces the prescription with that phase's exercises. You can still adjust every value below.</p>
+    </div>
+    <div>
+      <div class="head"><h3>Progression check</h3><span class="hint">The system suggests; you decide</span></div>
+      <div id="ready"></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:16px">
+    <div class="head"><h3>Session status · last 14 days</h3><span class="hint">Complete = every prescribed exercise reached its rep target</span></div>
+    <div class="cal" id="cal"></div>
+  </div>
+
+  <div class="grid two" style="margin-top:16px">
+    <div class="panel chart">
+      <div class="head"><h3>Movement accuracy per session</h3><span class="hint">Dashed line = 85% level-up threshold</span></div>
+      <div id="chart"></div>
+      <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Exercise</th><th>Sessions</th><th>Accuracy</th><th>Mean angle error</th><th>Past safety max</th></tr></thead><tbody id="exBody"></tbody></table></div>
+    </div>
+    <div class="panel">
+      <div class="head"><h3>Prescription</h3><span class="hint">Unity loads this at the next session</span></div>
+      <form id="rx"></form>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:16px">
+    <div class="head"><h3>Session log</h3></div>
+    <div class="tablewrap"><table><thead><tr><th>Started</th><th>Status</th><th>Pain before → after</th><th>Valid / attempted</th><th>Accuracy</th><th>Mean angle error</th><th>Points</th><th>Stars</th><th>Input</th></tr></thead><tbody id="log"></tbody></table></div>
+  </div>
+</div>
+<script>
+const DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const $=id=>document.getElementById(id);
+let pid=null, data=null;
+
+async function api(path, opts){ const r=await fetch(path,opts); if(!r.ok) throw new Error((await r.json()).error||r.statusText); return r.json(); }
+function showErr(e){ $("err").hidden=false; $("err").textContent="Can't reach the TheraQuest server: "+e.message; }
+
+async function init(){
+  try{
+    const ps=await api("/api/patients");
+    $("patientSel").innerHTML=ps.map(p=>`<option value="${p.id}">${p.code} · ${p.name||""}</option>`).join("");
+    pid=ps.length?ps[0].id:null; $("patientSel").onchange=e=>{pid=+e.target.value; load();};
+    if(pid) load();
+  }catch(e){ showErr(e); }
+}
+async function load(){
+  try{ data=await api(`/api/patients/${pid}/dashboard`); $("err").hidden=true; render(); }catch(e){ showErr(e); }
+}
+function render(){
+  const k=data.kpis, p=data.patient;
+  $("title").textContent=`${p.code} · ${data.program.name}`;
+  $("kAdh").textContent=k.adherence.rate+"%"; $("kAdhS").textContent=`${k.adherence.done} of ${k.adherence.scheduled} scheduled sessions completed`;
+  $("kAcc").textContent=k.attempts? k.accuracy+"%":"–"; $("kAccS").textContent=k.attempts? `${k.validReps} valid of ${k.attempts} attempted reps`:"no reps logged yet";
+  $("kStreak").textContent=k.streak;
+  $("kLvl").textContent="LV "+p.level; $("kLvlS").textContent=`${p.xp} XP · ${p.badges.length} badges`;
+  $("cal").innerHTML=data.calendar.map(d=>{ const dt=new Date(d.date+"T00:00"); return `<div class="day ${d.status}" title="${d.date}: ${d.status}">${DOW[d.dow]}<b>${dt.getDate()}</b></div>`; }).join("");
+  $("exBody").innerHTML=data.byExercise.map(e=>`<tr><td>${e.name}</td><td>${e.n}</td><td>${e.n?e.accuracy+"%":"–"}</td><td>${e.n?e.mean_err+"°":"–"}</td><td${e.unsafe?' style="color:var(--bad);font-weight:600"':""}>${e.n?e.unsafe+" reps":"–"}</td></tr>`).join("");
+  $("log").innerHTML=data.sessions.length? data.sessions.map(s=>`<tr><td class="mono">${s.started_at.replace("T"," ").slice(0,16)}</td><td><span class="pill ${s.status}">${s.status}</span></td><td>${painCell(s)}</td><td>${s.valid} / ${s.attempts}</td><td>${s.accuracy}%</td><td>${s.mean_err}°</td><td>${s.points}</td><td>${"★".repeat(s.stars)||"–"}</td><td>${s.input_source||""}</td></tr>`).join("")
+    : `<tr><td colspan="9" class="hint">No sessions yet. Run one in the Unity app.</td></tr>`;
+  renderChart(); renderRx(); renderPhase();
+}
+function painCell(s){
+  if(s.pain_before==null||s.pain_after==null) return '<span class="hint">–</span>';
+  const up=s.pain_after-s.pain_before;
+  return `<span class="${up>2?"painup":""}">${s.pain_before} → ${s.pain_after}${up>2?` (+${up})`:""}</span>`;
+}
+const esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let protocols=[];
+function renderPhase(){
+  const ph=data.phase, r=data.readiness;
+  $("phaseInfo").innerHTML= ph.id
+    ? `<div style="font-weight:600">${esc(ph.protocol)} · ${esc(ph.name)} <span class="hint">(${esc(ph.weeks)})</span></div>
+       <dl><dt>Since</dt><dd class="mono">${esc(ph.startedAt.replace("T"," ").slice(0,16))}</dd>
+       <dt>Goals</dt><dd>${esc(ph.goals)}</dd><dt>Precautions</dt><dd>${esc(ph.precautions)}</dd>
+       ${ph.vrAllowed?"":`<dt>VR</dt><dd style="color:var(--warn)">Not for VR. This phase is done with the therapist, so the patient has no TheraQuest session.</dd>`}</dl>`
+    : `<p class="hint">No protocol assigned. The patient follows the custom prescription below.</p>`;
+  if(!r){ $("ready").innerHTML='<p class="hint">Assign a protocol phase to see progression suggestions.</p>'; }
+  else{
+    const list=r.criteria.length? `<ul class="crit">${r.criteria.map(c=>`<li><span class="mk ${c.met?"ok":"no"}">${c.met?"✓":"○"}</span><span>${esc(c.label)}<div class="hint">${esc(c.detail)}</div></span></li>`).join("")}</ul>`:"";
+    let box;
+    if(!r.next) box=`<p class="hint">This is the final phase of the protocol.</p>`;
+    else if(r.ready) box=`<div class="suggest"><span><b>Ready for ${esc(r.next.name)}?</b><div class="hint">All criteria met. Check the patient before approving.</div></span>
+         <button class="btn" type="button" id="approveBtn" data-phase="${r.next.id}">Approve: move to ${esc(r.next.name)}</button></div>`;
+    else box=`<p class="hint">${r.note?esc(r.note)+" ":""}Not suggesting ${esc(r.next.name)} (${esc(r.next.weeks)}) yet. You can still move the patient on with the selector on the left.</p>`;
+    $("ready").innerHTML=list+box;
+  }
+  const hist=data.phaseHistory.map(h=>`<li><span class="mono">${esc(h.changed_at.replace("T"," ").slice(0,16))}</span> · ${h.phase?esc(h.protocol)+" · "+esc(h.phase):"Custom program"}${h.note?" · "+esc(h.note):""}</li>`).join("");
+  if(hist) $("ready").innerHTML+=`<div class="label" style="margin-top:14px">Phase history</div><ul class="hist">${hist}</ul>`;
+  if(document.activeElement!==$("protoSel")&&document.activeElement!==$("phaseSel")) fillPhaseSelects(ph);
+}
+function fillPhaseSelects(ph){
+  $("protoSel").innerHTML=`<option value="">Custom program (no protocol)</option>`+protocols.map(p=>`<option value="${p.id}" ${p.id===ph.protocolId?"selected":""}>${esc(p.name)}</option>`).join("");
+  fillPhases(ph.id);
+}
+function fillPhases(selected){
+  const pr=protocols.find(p=>p.id===+$("protoSel").value);
+  $("phaseSel").hidden=!pr;
+  $("phaseSel").innerHTML=pr? pr.phases.map(f=>`<option value="${f.id}" ${f.id===selected?"selected":""}>${esc(f.name)} · ${esc(f.weeks)}${f.vrAllowed?"":" (not for VR)"}</option>`).join(""):"";
+}
+$("protoSel").onchange=()=>fillPhases();
+async function setPhase(phaseId, note){
+  try{ await api(`/api/patients/${pid}/phase`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phase_id:phaseId,note})}); await load(); }
+  catch(e){ showErr(e); }
+}
+$("assignBtn").onclick=()=>{
+  const phaseId=$("protoSel").value? +$("phaseSel").value : null;
+  const msg=phaseId? "Assign this phase? Its exercises replace the current prescription (past results are kept)."
+                   : "Switch to a custom program? The current exercises stay; progression suggestions stop.";
+  if(confirm(msg)) setPhase(phaseId, "Assigned by therapist");
+};
+$("ready").addEventListener("click",ev=>{
+  const b=ev.target.closest("#approveBtn"); if(!b) return;
+  if(confirm("Approve moving the patient to the next phase? Its exercises replace the current prescription."))
+    setPhase(+b.dataset.phase, "Approved after progression check");
+});
+api("/api/protocols").then(p=>{ protocols=p; if(data) renderPhase(); }).catch(()=>{});
+function renderChart(){
+  const pts=[...data.sessions].reverse().filter(s=>s.attempts>0).slice(-14);
+  if(!pts.length){ $("chart").innerHTML='<p class="hint">Accuracy appears here after the first session.</p>'; return; }
+  const W=520,H=200,pl=34,pr=12,pt=12,pb=26;
+  const x=i=>pl+(pts.length===1?(W-pl-pr)/2:i*(W-pl-pr)/(pts.length-1));
+  const y=v=>pt+(100-Math.max(40,v))/60*(H-pt-pb);
+  let g=""; [40,60,80,100].forEach(v=>g+=`<line x1="${pl}" x2="${W-pr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${pl-6}" y="${y(v)+3}" text-anchor="end">${v}%</text>`);
+  g+=`<line x1="${pl}" x2="${W-pr}" y1="${y(85)}" y2="${y(85)}" stroke="var(--gold)" stroke-dasharray="4 4"/>`;
+  const c=pts.map((s,i)=>[x(i),y(s.accuracy)]);
+  const d=c.map((p,i)=>(i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" ");
+  if(c.length>1) g+=`<path d="${d} L${c.at(-1)[0]} ${H-pb} L${c[0][0]} ${H-pb} Z" fill="var(--accent)" opacity=".12"/>`;
+  g+=`<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2.2"/>`;
+  pts.forEach((s,i)=>{ g+=`<circle cx="${c[i][0]}" cy="${c[i][1]}" r="${i===pts.length-1?5:3.2}" fill="${s.status==='complete'?'var(--accent)':'var(--warn)'}" stroke="var(--surface)" stroke-width="1.5"><title>${s.started_at.slice(0,10)}: ${s.accuracy}%</title></circle>`;
+    if(i%Math.ceil(pts.length/7)===0||i===pts.length-1){ const dt=new Date(s.started_at); g+=`<text x="${c[i][0]}" y="${H-8}" text-anchor="middle">${dt.getMonth()+1}/${dt.getDate()}</text>`; } });
+  $("chart").innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Accuracy per session">${g}</svg>`;
+}
+const VIEW={front:"camera in front",side:"camera at the side"};
+const RX=[["sets","Sets",1,10],["reps","Reps / set",1,50],["targetAngle","Target °",5,175],["tolerance","Tol. ± °",1,30],
+          ["safetyMax","Safety max °",0,180],["holdSeconds","Hold s",0,30],["restSeconds","Rest s",0,300]];
+let library=[];
+function renderRx(){
+  if($("rx").contains(document.activeElement)) return;
+  $("rx").innerHTML=`<div class="add"><select id="addSel">${library.map(l=>`<option value="${l.code}">${l.joint} · ${l.name} (${VIEW[l.view]})</option>`).join("")}</select>
+     <button class="btn ghost" type="button" id="addBtn">Add exercise</button></div>`
+   +data.exercises.map(e=>`<div class="rxrow"><div class="nm"><span>${e.name}<div class="hint">${e.position} · ${VIEW[e.view]||""} · stage ${e.stage}, ${e.reps} reps now</div></span>
+      <button class="link" type="button" data-remove="${e.id}">Remove</button></div>
+    <div class="rxfields">${RX.map(([k,lbl,lo,hi])=>`<label>${lbl}<input type="number" id="${k}${e.id}" min="${lo}" max="${hi}" value="${k==="reps"?e.baseReps:e[k]}"></label>`).join("")}
+      <label>Side<select id="side${e.id}">${[["","Auto"],["L","Left"],["R","Right"]].map(([v,t])=>`<option value="${v}" ${e.side===v?"selected":""}>${t}</option>`).join("")}</select></label></div></div>`).join("")
+   +`<p class="hint">Safety max 0 = no limit. Hold 0 = no hold. The numbers are placeholders until your physical therapist sets them.</p>
+     <div class="label">Scheduled days</div><div class="days">${DOW.map((d,i)=>`<label><input type="checkbox" id="d${i}" ${data.program.days.includes(i)?"checked":""}> ${d}</label>`).join("")}</div>
+     <label class="hint" style="display:flex;gap:8px;align-items:center;margin-bottom:12px">Max reps after level-ups <input type="number" id="maxReps" min="1" max="50" value="${data.program.maxReps}" style="width:70px"></label>
+     <button class="btn" type="submit">Save prescription</button> <span class="hint" id="rxMsg"></span>`;
+}
+$("rx").addEventListener("submit",async ev=>{
+  ev.preventDefault();
+  const body={ days:DOW.map((_,i)=>$("d"+i).checked?i:-1).filter(i=>i>=0), maxReps:+$("maxReps").value,
+    exercises:data.exercises.map(e=>({id:e.id,side:$("side"+e.id).value,...Object.fromEntries(RX.map(([k])=>[k,+$(k+e.id).value]))})) };
+  try{ await api(`/api/patients/${pid}/program`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    document.activeElement.blur(); await load(); $("rxMsg").textContent="Saved"; }catch(e){ $("rxMsg").textContent="Not saved: "+e.message; }
+});
+$("rx").addEventListener("click",async ev=>{
+  const t=ev.target; let req=null;
+  if(t.id==="addBtn") req=[`/api/patients/${pid}/exercises`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:$("addSel").value})}];
+  else if(t.dataset.remove && confirm("Remove this exercise from the program? Its past results stay in the records.")) req=[`/api/patients/${pid}/exercises/${t.dataset.remove}`,{method:"DELETE"}];
+  if(!req) return;
+  try{ await api(...req); t.blur(); await load(); }catch(e){ showErr(e); }
+});
+api("/api/library").then(l=>{ library=l; if(data) renderRx(); }).catch(()=>{});
+init(); setInterval(()=>{ if(pid && !$("rx").contains(document.activeElement)) load(); }, 10000);
+</script>
+</body>
+</html>

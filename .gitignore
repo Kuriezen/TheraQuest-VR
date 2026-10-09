@@ -1,0 +1,17 @@
+# Patient data: never commit the database (Data Privacy Act / ethics)
+*.db
+*.db-journal
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Downloaded at first run by tracker.py
+*.task
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
