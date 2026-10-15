@@ -7,15 +7,18 @@ using UnityEngine;
 namespace TheraQuest
 {
     /// <summary>
-    /// Runs a rehabilitation session from start to finish (the System Flowchart, Section 3.6.1):
-    ///   load program -> wait for Start -> pain check-in (0-10) -> exercise 1..n (evaluate, feedback, score)
-    ///   -> pain check-in -> session summary -> upload to server (Adherence Monitoring) -> ready again.
+    /// Runs the game and a rehabilitation session from start to finish (the System Flowchart, Section 3.6.1):
+    ///   load program -> main menu -> exercise 1..n (evaluate, feedback, score) -> session summary
+    ///   -> upload to server (Adherence Monitoring) -> main menu again.
+    /// Esc / B pauses (the exercise freezes). The patient can walk around the clinic (PlayerMover);
+    /// starting the quest brings them back to the exercise spot.
+    /// Pain, soreness and swelling are recorded by the therapist on the dashboard, not asked here.
     /// If the patient's protocol phase is not for VR (immobilization or passive motion), no session starts.
+    /// The menu, music, subtitles, clinic room and walking are added at runtime when the scene
+    /// doesn't have them yet, so older scenes work without running Create Scene again.
     /// </summary>
     public class SessionManager : MonoBehaviour
     {
-        const int HighPain = 7;   // pain before the session at or above this shows a caution first
-
         [Header("References (filled in by TheraQuest > Create Scene)")]
         public ApiClient api;
         public MotionInput motion;
@@ -23,14 +26,17 @@ namespace TheraQuest
         public FeedbackManager feedback;
         public HUDController hud;
         public FigureVisualizer figure;
+        public HumanoidCoach coach;     // rigged coach; optional, shows the primitive figure itself when it has no character
         public HeadTracking head;
+        [Header("Added at runtime when empty")]
+        public MenuController menu;
+        public PlayerMover mover;
 
-        enum Phase { Loading, Ready, PainBefore, Running, PainAfter, Uploading, Summary }
+        enum Phase { Loading, Ready, Running, Uploading, Summary }
         Phase phase = Phase.Loading;
 
         ProgramResponse program;
         bool online, canStart;
-        string readyMessage;
         readonly List<ExerciseEvaluator> evaluators = new List<ExerciseEvaluator>();
         int index;
         GamificationManager game;
@@ -40,17 +46,50 @@ namespace TheraQuest
         float autoReadyTimer;        // simulated mode continues on its own
         LiveState lastState;
 
-        int painValue, painBefore = -1;
-        bool painWarned;
-        float painAutoTimer;
-        SessionUpload pendingUpload;
-        bool pendingCompleted;
-        int sumValid, sumAttempts, sumUnsafe;
-        float sumAcc, sumErr;
-
         ExerciseDef Current => program != null && program.exercises.Length > 0 ? program.exercises[Mathf.Clamp(index, 0, program.exercises.Length - 1)] : null;
         ExerciseEvaluator CurrentEval => phase == Phase.Running && index < evaluators.Count ? evaluators[index] : null;
         bool Simulated => motion.source == InputSource.Simulated;
+
+        void Awake()
+        {
+            SmoothEdges(Camera.main);
+            if (menu == null) menu = GetComponent<MenuController>();
+            if (menu == null) menu = gameObject.AddComponent<MenuController>();
+            menu.session = this;
+            if (FindFirstObjectByType<MusicPlayer>() == null) gameObject.AddComponent<MusicPlayer>();
+            if (FindFirstObjectByType<Subtitles>() == null) gameObject.AddComponent<Subtitles>();
+            if (FindFirstObjectByType<ClinicRoom>() == null) gameObject.AddComponent<ClinicRoom>();
+            if (mover == null && head != null && head.transform.parent != null)
+            {
+                var rig = head.transform.parent.gameObject;
+                mover = rig.GetComponent<PlayerMover>();
+                if (mover == null) mover = rig.AddComponent<PlayerMover>();
+                mover.head = head;
+            }
+        }
+
+        void OnDestroy() { Time.timeScale = 1f; AudioListener.pause = false; }
+
+        /// <summary>
+        /// Anti-aliasing for smooth edges instead of jagged pixels: MSAA where the pipeline allows it, plus
+        /// SMAA (high) on a URP camera. Set through reflection, so the scripts also compile without URP.
+        /// </summary>
+        static void SmoothEdges(Camera cam)
+        {
+            if (cam == null) return;
+            cam.allowMSAA = true;
+            var type = Type.GetType("UnityEngine.Rendering.Universal.UniversalAdditionalCameraData, Unity.RenderPipelines.Universal.Runtime");
+            if (type == null) return;
+            var data = cam.GetComponent(type);
+            if (data == null) data = cam.gameObject.AddComponent(type);
+            void Set(string property, string value)
+            {
+                var prop = type.GetProperty(property);
+                if (prop != null && prop.PropertyType.IsEnum) prop.SetValue(data, Enum.Parse(prop.PropertyType, value));
+            }
+            Set("antialiasing", "SubpixelMorphologicalAntiAliasing");
+            Set("antialiasingQuality", "High");
+        }
 
         IEnumerator Start()
         {
@@ -66,149 +105,214 @@ namespace TheraQuest
             if (program.exercises == null) program.exercises = new ExerciseDef[0];
             index = 0;
             evaluators.Clear();
+            game = null;
             hud.SetPatient(program.patient, program.program, online, program.phase);
             hud.SetQuest(program.exercises, null, 0, false);
-
             canStart = program.phase.vrAllowed && program.exercises.Length > 0;
-            if (!program.phase.vrAllowed)
-                readyMessage = $"{program.phase.name} ({program.phase.weeks}) is done with your therapist.\n<size=36>No VR session in this phase.</size>";
-            else if (program.exercises.Length == 0)
-                readyMessage = "No exercises prescribed yet. Ask your therapist.";
-            else
-                readyMessage = online ? "Press Start (Space / A) to begin today's quest"
-                                      : "Server offline. Using default program. Press Start to begin";
-            hud.SetFeedback(readyMessage, canStart ? Tone.Neutral : Tone.Warn);
+            ShowReadyBanner();
             phase = Phase.Ready;
+            menu.Open(MenuController.Page.Main);
         }
 
+        void ShowReadyBanner()
+        {
+            if (!program.phase.vrAllowed)
+                hud.SetFeedback("Right now you exercise with your therapist.\n<size=34>No VR session today</size>", Tone.Warn);
+            else if (program.exercises.Length == 0)
+                hud.SetFeedback("No exercises prescribed yet. Ask your therapist.", Tone.Warn);
+            else
+                hud.SetFeedback("Stand on the teal spot and press Start!\n<size=34>Space or A · Esc / B for the menu</size>", Tone.Neutral);
+        }
+
+        // ---------------------------------------------------------------- menu actions
+        public bool CanStart => canStart && phase == Phase.Ready;
+
+        public string MenuSubtitle
+        {
+            get
+            {
+                if (program == null) return "";
+                string plan = !string.IsNullOrEmpty(program.phase.name) ? $"{program.phase.protocol} · {program.phase.name}" : program.program.name;
+                GamificationManager.Level(program.patient.xp, out int lv, out _, out _);
+                return $"{program.patient.code} · {plan} · level {lv}";
+            }
+        }
+
+        public string MenuInfo
+        {
+            get
+            {
+                if (program == null) return "Loading…";
+                var sb = new StringBuilder();
+                if (!program.phase.vrAllowed) sb.Append($"<color={UIKit.HexWarn}>Right now you exercise with your therapist, not in VR.</color>");
+                else if (program.exercises.Length == 0) sb.Append($"<color={UIKit.HexWarn}>No exercises yet. Ask your therapist.</color>");
+                else
+                {
+                    float seconds = 0f;
+                    foreach (var e in program.exercises)
+                        seconds += 25f + e.TotalReps * (4f + e.holdSeconds) + Mathf.Max(0, e.sets - 1) * e.restSeconds;
+                    sb.Append($"Today: <b>{program.exercises.Length} exercises</b> · about {Mathf.Max(1, Mathf.RoundToInt(seconds / 60f))} minutes");
+                    if (GameSettings.ShowDetails && !string.IsNullOrEmpty(program.phase.romGoal)) sb.Append($"\n<color={UIKit.HexMuted}>Goal: {program.phase.romGoal}</color>");
+                }
+                if (!online) sb.Append($"\n<color={UIKit.HexWarn}>Practice mode: your results are saved and sent later.</color>");
+                return sb.ToString();
+            }
+        }
+
+        public string PauseSubtitle => Current != null ? $"{Current.name} · set {CurrentEval?.SetNumber ?? 1} of {Mathf.Max(1, Current.sets)}" : "";
+
+        public void StartQuest()
+        {
+            if (!CanStart) return;
+            menu.Close();
+            ReturnToStation();
+            BeginSession();
+        }
+
+        public void FreeRoam()
+        {
+            menu.Close();
+            hud.SetFeedback("Explore the clinic! Then press Start on the teal spot\n<size=32>Walk W A S D · Turn Q / E · Menu Esc</size>", Tone.Neutral);
+            Subtitles.Say("Explore the clinic. Walk with W A S D or the left stick. Come back to the teal spot and press Start when you're ready.", 5f);
+        }
+
+        void Pause()
+        {
+            Time.timeScale = 0f;
+            AudioListener.pause = true;
+            menu.Open(MenuController.Page.Pause);
+        }
+
+        public void Resume()
+        {
+            Time.timeScale = 1f;
+            AudioListener.pause = false;
+            menu.Close();
+        }
+
+        public void EndSessionEarly()
+        {
+            Resume();
+            if (phase == Phase.Running) FinishSession(endedEarly: true);
+        }
+
+        public void ReturnToStation()
+        {
+            if (mover != null) mover.ReturnToStation();
+            else if (head != null) head.Recenter();
+        }
+
+        public void Quit()
+        {
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+            Application.Quit();
+#endif
+        }
+
+        // ---------------------------------------------------------------- frame loop
         void Update()
         {
             InputHelper.Tick();
-            float dt = Time.deltaTime;
-
-            if (InputHelper.NextSourcePressed) motion.NextSource();
-            if (InputHelper.RecenterPressed && head != null) head.Recenter();
+            float dt = Time.deltaTime;   // 0 while paused, which freezes the exercise
+            if (mover != null) mover.locked = menu.IsOpen;
 
             var ex = Current;
             motion.Sample(ex, dt);
             UpdateSourceText();
 
-            switch (phase)
+            if (menu.IsOpen) menu.HandleInput();
+            else
             {
-                case Phase.Ready:
-                    if (InputHelper.StartPressed && canStart) OpenPain(Phase.PainBefore, Simulated ? UnityEngine.Random.Range(0, 4) : 0);
-                    break;
-
-                case Phase.PainBefore:
-                    if (InputHelper.EndPressed)
-                    {
-                        hud.HidePain();
-                        hud.SetFeedback(readyMessage, Tone.Neutral);
-                        phase = Phase.Ready;
-                    }
-                    else if (PainPicked(dt))
-                    {
-                        if (painValue >= HighPain && !painWarned) { painWarned = true; ShowPainPicker(); break; }
-                        painBefore = painValue;
-                        hud.HidePain();
-                        BeginSession();
-                    }
-                    break;
-
-                case Phase.Running:
-                    if (InputHelper.EndPressed) { FinishSession(endedEarly: true); break; }
-                    if (awaitingReady)
-                    {
-                        if (InputHelper.StartPressed || (Simulated && (autoReadyTimer -= dt) <= 0f))
-                        {
-                            awaitingReady = false;
-                            ShowRepMessage(ex.cue, Tone.Neutral, 2f);
-                        }
-                        else hud.SetFeedback($"{ex.name}: {ex.position}\n<size=36>Camera {ex.CameraText} · press Start when ready</size>", Tone.Neutral);
+                if (InputHelper.NextSourcePressed) motion.NextSource();
+                if (InputHelper.RecenterPressed) ReturnToStation();
+                switch (phase)
+                {
+                    case Phase.Ready:
+                        if (InputHelper.StartPressed && canStart) StartQuest();
+                        else if (InputHelper.BackPressed) menu.Open(MenuController.Page.Main);
                         break;
-                    }
-                    var ev = CurrentEval;
-                    if (motion.HasReading || ev.Resting) ev.Update(motion.Angle, motion.Fault, dt);
-                    if (ev.State == LiveState.Unsafe)
-                    {
-                        if (lastState != LiveState.Unsafe) feedback.PlayWarning();
-                        repMessageTimer = 0f;   // the STOP warning always shows right away
-                    }
-                    lastState = ev.State;
-                    if (repMessageTimer > 0f) repMessageTimer -= dt;
-                    else if (!motion.HasReading && !ev.Resting)
-                        hud.SetFeedback($"Step into view so your {ex.joint.ToLower()} is visible", Tone.Warn);
-                    else
-                    {
-                        var (msg, tone) = FeedbackManager.LiveMessage(ev, motion.Fault);
-                        hud.SetFeedback(msg, tone);
-                    }
-                    break;
-
-                case Phase.PainAfter:
-                    if (InputHelper.EndPressed) { hud.HidePain(); Upload(-1); }      // skip the check-in
-                    else if (PainPicked(dt)) { hud.HidePain(); Upload(painValue); }
-                    break;
-
-                case Phase.Summary:
-                    if (InputHelper.StartPressed) { hud.HideSummary(); StartCoroutine(LoadProgram()); }
-                    break;
+                    case Phase.Running:
+                        if (InputHelper.BackPressed) Pause();
+                        else RunExercise(ex, dt);
+                        break;
+                    case Phase.Summary:
+                        if (InputHelper.StartPressed || InputHelper.BackPressed) { hud.HideSummary(); StartCoroutine(LoadProgram()); }
+                        break;
+                }
             }
 
             var cur = CurrentEval;
             Tone figTone = cur == null ? Tone.Neutral :
                 cur.State == LiveState.OnTarget || cur.State == LiveState.Holding ? Tone.Good :
                 cur.State == LiveState.TooFar || cur.State == LiveState.Fault || cur.State == LiveState.Unsafe ? Tone.Bad : Tone.Neutral;
-            figure.Show(ex, motion.Angle, figTone);
+            if (coach != null)
+            {
+                coach.ghostVisible = phase == Phase.Running;   // no ghost on the menu or summary screens
+                coach.Show(ex, motion.Angle, figTone);
+            }
+            else figure.Show(ex, motion.Angle, figTone);
             hud.SetExercise(ex, cur, motion.Angle, game != null ? game.Points : 0, game != null ? game.Multiplier : 1f);
+        }
+
+        void RunExercise(ExerciseDef ex, float dt)
+        {
+            if (awaitingReady)
+            {
+                if (InputHelper.StartPressed || (Simulated && (autoReadyTimer -= dt) <= 0f))
+                {
+                    awaitingReady = false;
+                    ShowRepMessage(ex.cue, Tone.Neutral, 2f);
+                    Subtitles.Say(ex.cue, 3f, "Coach");
+                }
+                else hud.SetFeedback($"Get ready: {ex.position}\n<size=34>Camera {ex.CameraText} · press Start when ready</size>", Tone.Neutral);
+                return;
+            }
+            var ev = CurrentEval;
+            if (motion.HasReading || ev.Resting) ev.Update(motion.Angle, motion.Fault, dt);
+            if (ev.State == LiveState.Unsafe)
+            {
+                if (lastState != LiveState.Unsafe)
+                {
+                    feedback.PlayWarning();
+                    Subtitles.Say($"STOP. You went past the safe limit of {ex.safetyMax:0}°. Lower slowly.", 3f, "Warning tone");
+                }
+                repMessageTimer = 0f;   // the STOP warning always shows right away
+            }
+            else if (ev.State == LiveState.Resting && lastState != LiveState.Resting)
+                Subtitles.Say($"Set {ev.SetNumber - 1} of {ev.Sets} done. Rest for {ex.restSeconds:0} seconds.", 3f, "Coach");
+            lastState = ev.State;
+            if (repMessageTimer > 0f) repMessageTimer -= dt;
+            else if (!motion.HasReading && !ev.Resting)
+                hud.SetFeedback($"Step into view so your {ex.joint.ToLower()} is visible", Tone.Warn);
+            else
+            {
+                var (msg, tone) = FeedbackManager.LiveMessage(ev, motion.Fault);
+                hud.SetFeedback(msg, tone);
+            }
         }
 
         void UpdateSourceText()
         {
             string status;
-            if (motion.source == InputSource.Webcam)
-                status = receiver.IsReceiving
-                    ? $"<color=#45CC85>● Tracker connected</color> · {receiver.PacketsPerSecond:0} fps · side {motion.MeasuredSide}"
-                    : "<color=#F2695D>● No tracker data</color>\nRun  python tracker.py  then step into view.\nOr press Tab / X to switch to keyboard or simulated input.";
+            if (GameSettings.ShowDetails)
+            {
+                if (motion.source == InputSource.Webcam)
+                    status = receiver.IsReceiving
+                        ? $"<color={UIKit.HexGood}>● Tracker</color> {receiver.PacketsPerSecond:0} fps · side {motion.MeasuredSide}"
+                        : $"<color={UIKit.HexBad}>● No tracker data</color>: run tracker.py";
+                else status = $"Input: {motion.SourceLabel}";
+                status += head != null && head.HeadsetActive ? " · headset on" : " · desktop view";
+            }
+            else if (motion.source == InputSource.Webcam)
+                status = receiver.IsReceiving ? $"<color={UIKit.HexGood}>●</color> Camera is watching. You're good to go!"
+                                              : $"<color={UIKit.HexBad}>●</color> Camera can't see you yet. Ask for help.";
             else if (motion.source == InputSource.Keyboard)
-                status = "Move the limb with Up / Down arrows or the right thumbstick.";
+                status = $"<color={UIKit.HexWarn}>●</color> Practice: move with the Up / Down keys";
             else
-                status = "A simulated patient is doing the reps, with natural variation and occasional form errors.";
-            hud.SetSource($"<b>Input: {motion.SourceLabel}</b>\n{status}\n{(head != null && head.HeadsetActive ? "Headset: on" : "Headset: not detected (desktop view)")}");
-        }
-
-        // ------------------------------------------------------------- pain check-in
-        void OpenPain(Phase which, int start)
-        {
-            phase = which;
-            painValue = Mathf.Clamp(start, 0, 10);
-            painWarned = false;
-            painAutoTimer = 2.5f;
-            ShowPainPicker();
-        }
-
-        void ShowPainPicker()
-        {
-            bool before = phase == Phase.PainBefore;
-            string hint;
-            if (painWarned)
-                hint = $"<color=#F2695D>{painValue}/10 is high pain. Exercising may not be safe today.</color>\n" +
-                       "Press Start to continue gently, or Esc / B to stop and contact your therapist.";
-            else
-                hint = "Use Left / Right (or the right thumbstick) to choose, then press Start.\n" +
-                       (before ? "Esc / B to go back." : "Esc / B to skip.") +
-                       (Simulated ? "\n<color=#8EA7A4>Simulated mode picks a value for you.</color>" : "");
-            hud.ShowPain(before ? "How much pain do you have right now?" : "How much pain do you have now?", painValue, hint);
-        }
-
-        /// <returns>true when the patient confirms the selected value</returns>
-        bool PainPicked(float dt)
-        {
-            int old = painValue;
-            if (InputHelper.LeftPressed) painValue = Mathf.Max(0, painValue - 1);
-            if (InputHelper.RightPressed) painValue = Mathf.Min(10, painValue + 1);
-            if (painValue != old) { painWarned = false; ShowPainPicker(); }
-            return InputHelper.StartPressed || (Simulated && !painWarned && (painAutoTimer -= dt) <= 0f);
+                status = $"<color={UIKit.HexPurple}>●</color> Demo: the game plays by itself";
+            hud.SetSource(status);
         }
 
         // ------------------------------------------------------------- session flow
@@ -227,6 +331,7 @@ namespace TheraQuest
             {
                 feedback.PlayBadge();
                 ShowRepMessage("Badge unlocked: " + GamificationManager.BadgeNames[code], Tone.Good, 2f);
+                Subtitles.Say("Badge unlocked: " + GamificationManager.BadgeNames[code], 2.5f, "Badge chime");
             };
             startedAt = DateTime.Now;
             phase = Phase.Running;
@@ -240,6 +345,8 @@ namespace TheraQuest
             autoReadyTimer = 2.5f;
             repMessageTimer = 0f;
             lastState = LiveState.Idle;
+            var ex = Current;
+            Subtitles.Say($"{(index > 0 ? "Next: " : "")}{ex.name}. {ex.position}. Put the camera {ex.CameraText}, then press Start.", 5f, "Coach");
         }
 
         void OnRep(RepResult r)
@@ -249,8 +356,18 @@ namespace TheraQuest
             feedback.PlayRep(r);
             string extra = r.valid && game.Combo > 1 ? $"  ×{game.Multiplier:0.0}" : "";
             hud.Pop($"+{pts}{extra}", r.valid);
-            if (r.valid) ShowRepMessage(r.accuracy >= 95 ? $"Excellent! {r.accuracy}%" : $"Good rep · {r.accuracy}%", Tone.Good, 1.2f);
-            else ShowRepMessage("Rep not counted. " + ev.Describe(r), Tone.Bad, 1.8f);
+            string line;
+            switch (FeedbackManager.Grade(r))
+            {
+                case FeedbackManager.RepGrade.Perfect: line = "Perfect!" + Pct(r); ShowRepMessage(line, Tone.Good, 1.2f); break;
+                case FeedbackManager.RepGrade.Awesome: line = "Awesome!" + Pct(r); ShowRepMessage(line, Tone.Good, 1.2f); break;
+                case FeedbackManager.RepGrade.Great: line = "Great job!" + Pct(r); ShowRepMessage(line, Tone.Good, 1.2f); break;
+                default:
+                    line = "Oops! " + (GameSettings.ShowDetails ? ev.Describe(r) : ev.Friendly(r));
+                    ShowRepMessage(line, Tone.Bad, 1.8f);
+                    break;
+            }
+            Subtitles.Say(line, r.valid ? 1.6f : 2.6f, FeedbackManager.RepSoundName(r));
 
             if (ev.Done)
             {
@@ -264,21 +381,24 @@ namespace TheraQuest
             hud.SetQuest(program.exercises, evaluators, index, phase == Phase.Running);
         }
 
+        static string Pct(RepResult r) => GameSettings.ShowDetails ? $" {r.accuracy}%" : "";
+
         void ShowRepMessage(string text, Tone tone, float seconds)
         {
             hud.SetFeedback(text, tone);
             repMessageTimer = seconds;
         }
 
-        /// <summary>Scores the session, then asks for the pain check-in before uploading.</summary>
+        /// <summary>Scores the session and uploads it.</summary>
         void FinishSession(bool endedEarly)
         {
+            phase = Phase.Uploading;
             bool allDone = true;
             foreach (var e in evaluators) allDone &= e.Done;
-            pendingCompleted = !endedEarly && allDone;
-            if (pendingCompleted) game.AddCompletionBonus();
+            bool completed = !endedEarly && allDone;
+            if (completed) game.AddCompletionBonus();
 
-            pendingUpload = new SessionUpload
+            var upload = new SessionUpload
             {
                 patient_id = program.patient.id,
                 started_at = startedAt.ToString("yyyy-MM-ddTHH:mm:ss"),
@@ -286,67 +406,54 @@ namespace TheraQuest
                 ended_early = endedEarly,
                 input_source = motion.SourceLabel,
                 points = game.Points,
-                pain_before = painBefore,
                 badges_earned = new List<string>(game.EarnedThisSession)
             };
             float accSum = 0; int accN = 0; float errSum = 0;
-            sumValid = sumAttempts = sumUnsafe = 0;
+            int valid = 0, attempts = 0, unsafeReps = 0;
             foreach (var e in evaluators)
             {
-                pendingUpload.exercises.Add(e.ToResult());
+                upload.exercises.Add(e.ToResult());
                 foreach (var a in e.Accuracies) { accSum += a; accN++; }
                 foreach (var x in e.Errors) errSum += x;
-                sumValid += e.ValidReps; sumAttempts += e.Attempts; sumUnsafe += e.UnsafeReps;
+                valid += e.ValidReps; attempts += e.Attempts; unsafeReps += e.UnsafeReps;
             }
-            sumAcc = accN > 0 ? accSum / accN : 0f;
-            sumErr = accN > 0 ? errSum / accN : 0f;
-            pendingUpload.stars = GamificationManager.Stars(sumAcc, pendingCompleted);
-
-            hud.SetFeedback(pendingCompleted ? "Quest cleared! One last question" : "Session ended. One last question", Tone.Neutral);
-            int start = painBefore >= 0 ? painBefore : 0;
-            if (Simulated) start = Mathf.Clamp(start + UnityEngine.Random.Range(0, 3), 0, 10);
-            OpenPain(Phase.PainAfter, start);
-        }
-
-        void Upload(int painAfter)
-        {
-            phase = Phase.Uploading;
-            var upload = pendingUpload;
-            bool completed = pendingCompleted;
-            upload.pain_after = painAfter;
+            float avgAcc = accN > 0 ? accSum / accN : 0f;
+            float avgErr = accN > 0 ? errSum / accN : 0f;
+            upload.stars = GamificationManager.Stars(avgAcc, completed);
 
             hud.SetFeedback("Saving session…", Tone.Neutral);
             StartCoroutine(api.UploadSession(upload, resp =>
             {
                 var sb = new StringBuilder();
-                sb.AppendLine($"Valid reps   <b>{sumValid} / {sumAttempts}</b>");
-                sb.AppendLine($"Accuracy     <b>{sumAcc:0}%</b>");
-                sb.AppendLine($"Mean angle error   <b>{sumErr:0.0}°</b>");
-                if (sumUnsafe > 0) sb.AppendLine($"<color=#F2695D>Past the safe limit   <b>{sumUnsafe} reps</b> (your therapist will see this)</color>");
-                if (upload.pain_before >= 0 && upload.pain_after >= 0)
-                {
-                    int up = upload.pain_after - upload.pain_before;
-                    sb.AppendLine($"Pain         <b>{upload.pain_before} → {upload.pain_after}</b>");
-                    if (up > 2) sb.AppendLine($"<color=#F2695D>Your pain went up by {up} points. Rest, and tell your therapist if it hasn't settled within 2 hours.</color>");
-                }
-                sb.AppendLine($"Points       <b>{game.Points}</b>" + (completed ? $"  (includes +{GamificationManager.CompletionBonus} completion bonus)" : ""));
+                sb.AppendLine($"<color={UIKit.HexGood}>✓</color>  <b>{valid}</b> good reps");
+                sb.AppendLine($"<color={UIKit.HexGold}>★</color>  <b>{game.Points}</b> points" + (completed ? $"  (+{GamificationManager.CompletionBonus} bonus!)" : ""));
+                if (GameSettings.ShowDetails)
+                    sb.AppendLine($"<color={UIKit.HexMuted}>{valid}/{attempts} valid · accuracy {avgAcc:0}% · mean error {avgErr:0.0}°</color>");
+                if (unsafeReps > 0) sb.AppendLine($"<color={UIKit.HexBad}>!</color>  {unsafeReps} reps went too far. Remember the STOP line.");
                 sb.AppendLine();
                 if (resp != null)
                 {
                     bool levelUp = false;
-                    foreach (var n in resp.notes) { sb.AppendLine("<color=#F5C451>• " + n + "</color>"); levelUp |= n.StartsWith("Level up"); }
-                    if (levelUp) feedback.PlayLevelUp();
+                    foreach (var n in resp.notes) { sb.AppendLine($"<color={UIKit.HexPurple}>♦</color>  {n}"); levelUp |= n.StartsWith("Level up"); }
+                    if (levelUp) { feedback.PlayLevelUp(); Subtitles.Say("Level up!", 2.5f, "Level-up jingle"); }
                     program.patient = resp.patient;
                     hud.SetPatient(resp.patient, program.program, true, program.phase);
-                    sb.AppendLine($"\nSaved as <b>{resp.status}</b>. Your therapist can see it now.");
+                    sb.AppendLine("\nSaved! Your therapist can see how you did.");
                 }
                 else
                 {
-                    foreach (var b in game.EarnedThisSession) sb.AppendLine("<color=#F5C451>• Badge: " + GamificationManager.BadgeNames[b] + "</color>");
-                    sb.AppendLine("\n<color=#F0B43C>Server offline. Saved on this computer; it will upload next time.</color>");
+                    foreach (var b in game.EarnedThisSession) sb.AppendLine($"<color={UIKit.HexPurple}>♦</color>  Badge: " + GamificationManager.BadgeNames[b]);
+                    sb.AppendLine("\nSaved on this computer. It will be sent to your therapist later.");
                 }
-                sb.AppendLine("\nPress Start to continue.");
-                hud.ShowSummary(completed ? "Quest cleared!" : "Progress saved", upload.stars, sb.ToString());
+                sb.AppendLine("Tell your therapist how you feel after today's session.");
+                sb.AppendLine($"\n<color={UIKit.HexMuted}>Press Start to continue</color>");
+                if (completed)
+                {
+                    feedback.PlayVictory();
+                    Subtitles.Say("Quest cleared! Great work today.", 3f, "Victory fanfare");
+                }
+                else Subtitles.Say("Session ended. Your progress is saved.", 3f);
+                hud.ShowSummary(completed ? "Quest cleared!" : "Good effort!", upload.stars, sb.ToString());
                 hud.SetFeedback(completed ? "Great work today" : "Session ended early", Tone.Neutral);
                 phase = Phase.Summary;
             }));

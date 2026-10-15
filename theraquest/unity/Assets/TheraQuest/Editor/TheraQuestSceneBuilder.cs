@@ -8,6 +8,11 @@ namespace TheraQuest.EditorTools
     /// Menu: TheraQuest > Create Scene
     /// Builds the whole TheraQuest scene in one click and wires every reference,
     /// so you don't have to drag components around by hand.
+    /// Coach: select a Humanoid character (model or prefab) in the Project window before running it,
+    /// or add them to Humanoid Coach > Characters afterwards. With nothing selected it lists every
+    /// model in a Coaches folder (the patient picks one on the start screen); with none the
+    /// primitive figure is used. A looping idle (e.g. Mixamo "Breathing Idle") in a CoachAnimations folder
+    /// becomes the coach's resting animation.
     /// </summary>
     public static class TheraQuestSceneBuilder
     {
@@ -18,6 +23,10 @@ namespace TheraQuest.EditorTools
         public static void CreateScene()
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
+            var selected = Selection.activeGameObject;   // read before the new scene clears the selection
+            var characters = selected != null && EditorUtility.IsPersistent(selected) && IsHumanoid(selected)
+                ? new[] { new TheraQuest.HumanoidCoach.Option { name = selected.name, model = selected } }
+                : FindCoachAvatars();
             var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
 
             // Camera rig ---------------------------------------------------------
@@ -52,9 +61,16 @@ namespace TheraQuest.EditorTools
             hudGo.transform.SetParent(root.transform, false);
             var hud = hudGo.AddComponent<TheraQuest.HUDController>();
 
-            var figGo = new GameObject("Coach Figure");
+            var figGo = new GameObject("Primitive Figure (fallback)");
             figGo.transform.position = new Vector3(0, 0, 2.6f);
             var figure = figGo.AddComponent<TheraQuest.FigureVisualizer>();
+
+            var coachGo = new GameObject("Humanoid Coach");
+            coachGo.transform.SetPositionAndRotation(new Vector3(0, 0, 2f), Quaternion.Euler(0, 180, 0));   // 2 m ahead, facing the player
+            var coach = coachGo.AddComponent<TheraQuest.HumanoidCoach>();
+            coach.characters = characters;
+            coach.fallback = figure;
+            coach.idleClip = FindIdleClip();
 
             var session = root.AddComponent<TheraQuest.SessionManager>();
             session.api = api;
@@ -63,6 +79,7 @@ namespace TheraQuest.EditorTools
             session.feedback = fb;
             session.hud = hud;
             session.figure = figure;
+            session.coach = coach;
             session.head = head;
 
             // Project settings this app needs ---------------------------------------------
@@ -71,8 +88,53 @@ namespace TheraQuest.EditorTools
 
             EditorSceneManager.SaveScene(scene, ScenePath);
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
-            Selection.activeGameObject = root;
-            Debug.Log("[TheraQuest] Scene created at " + ScenePath + ". Press Play.");
+            Selection.activeGameObject = characters.Length > 0 ? root : coachGo;
+            Debug.Log("[TheraQuest] Scene created at " + ScenePath + (characters.Length > 0
+                ? $". Coaches: {string.Join(", ", System.Array.ConvertAll(characters, c => c.name))}. Press Play."
+                : ". Add a Humanoid character to Humanoid Coach > Characters, or press Play to use the primitive figure."));
+        }
+
+        /// <summary>Every Humanoid model under a Coaches folder (see CoachModelImporter), female coach first.</summary>
+        static TheraQuest.HumanoidCoach.Option[] FindCoachAvatars()
+        {
+            var list = new System.Collections.Generic.List<TheraQuest.HumanoidCoach.Option>();
+            foreach (var guid in AssetDatabase.FindAssets("t:Model"))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!path.Contains(CoachModelImporter.Folder)) continue;
+                var go = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (go == null || !IsHumanoid(go)) continue;
+                // Quaternius Female_Casual / Male_Casual -> "Female" / "Male"; Mixamo characters keep their name
+                string label = go.name.Contains("Female") ? "Female" : go.name.Contains("Male") ? "Male"
+                             : ObjectNames.NicifyVariableName(go.name.Replace('_', ' '));
+                list.Add(new TheraQuest.HumanoidCoach.Option { name = label, model = go });
+            }
+            list.Sort((a, b) => string.CompareOrdinal(a.name, b.name));   // "Female" before "Male"
+            return list.ToArray();
+        }
+
+        /// <summary>First looping clip with "idle" in its name under a CoachAnimations folder (e.g. Mixamo "Breathing Idle").</summary>
+        static AnimationClip FindIdleClip()
+        {
+            AnimationClip any = null;
+            foreach (var guid in AssetDatabase.FindAssets("t:AnimationClip"))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!path.Contains(CoachModelImporter.AnimationFolder)) continue;
+                foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(path))
+                {
+                    if (!(asset is AnimationClip clip) || clip.name.StartsWith("__preview__")) continue;
+                    if (clip.name.ToLowerInvariant().Contains("idle") || path.ToLowerInvariant().Contains("idle")) return clip;
+                    if (any == null) any = clip;
+                }
+            }
+            return any;
+        }
+
+        static bool IsHumanoid(GameObject go)
+        {
+            var anim = go.GetComponentInChildren<Animator>(true);
+            return anim != null && anim.avatar != null && anim.avatar.isHuman;
         }
 
         static GameObject Block(string name, Vector3 pos, Vector3 scale, Material mat)

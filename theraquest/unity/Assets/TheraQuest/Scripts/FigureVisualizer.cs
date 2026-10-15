@@ -9,34 +9,35 @@ namespace TheraQuest
     /// Each exercise code (see server.py LIBRARY) has its own posture (standing, seated
     /// on a chair, lying on a bed), camera-matching view and limb motion. The figure is
     /// mirrored when the operated side is the left.
-    /// Swap this for a rigged avatar later (e.g. a Mixamo character) by driving its bones
-    /// with the same angle.
+    /// HumanoidCoach drives a rigged avatar instead and falls back to this figure when
+    /// no Humanoid character is assigned.
     /// </summary>
     public class FigureVisualizer : MonoBehaviour
     {
         const float UpperArm = 0.30f, Forearm = 0.28f, Thigh = 0.42f, Shin = 0.42f;
         const float BedTop = 0.44f;
 
-        enum Posture { Standing, Seated, Lying }
+        enum Posture { Standing, Seated, Lying, SideLying }
 
-        Material skin, active, ghost, chairMat;
-        Transform body, chair, bed;
+        Material skin, active, ghost;
+        Transform body, chair, bed, bedSide;
         Transform rUpperArm, rForearm, rThigh, rShin, lUpperArm, lThigh, lShin;
         Transform ghostPivot, ghostSeg;
         Renderer[] activeRenderers = new Renderer[0];
         string currentCode, currentSide;
         Posture posture;
+        float shown, shownVel, popTime = 10f, mirror = 1f;   // smoothed angle, springy pop on changes
 
         void Awake()
         {
             skin = MakeMat(new Color(0.62f, 0.76f, 0.74f), false);
             active = MakeMat(new Color(0.94f, 0.71f, 0.24f), false);
             ghost = MakeMat(new Color(0.18f, 0.76f, 0.68f, 0.35f), true);
-            chairMat = MakeMat(new Color(0.25f, 0.32f, 0.34f), false);
             Build();
         }
 
-        Material MakeMat(Color c, bool transparent)
+        /// <summary>Also used by HumanoidCoach for its ghost and props.</summary>
+        public static Material MakeMat(Color c, bool transparent)
         {
             // Copy the default material of a primitive, so this works in URP and Built-in projects.
             var tmp = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -109,13 +110,16 @@ namespace TheraQuest
 
             chair = new GameObject("Chair").transform;
             chair.SetParent(transform, false);
-            Part(PrimitiveType.Cube, chair, new Vector3(0, 0.47f, 0.05f), new Vector3(0.5f, 0.06f, 0.5f), chairMat, "Seat");
-            Part(PrimitiveType.Cube, chair, new Vector3(0, 0.95f, -0.22f), new Vector3(0.5f, 0.9f, 0.05f), chairMat, "Back");
-            Part(PrimitiveType.Cube, chair, new Vector3(0, 0.22f, 0.05f), new Vector3(0.44f, 0.44f, 0.44f), chairMat, "Base");
+            PropBuilder.Chair(chair, 0.5f, -0.2f, 0.3f);
 
             bed = new GameObject("Bed").transform;
             bed.SetParent(transform, false);
-            Part(PrimitiveType.Cube, bed, new Vector3(0, BedTop / 2f, -0.02f), new Vector3(0.7f, BedTop, 2.0f), chairMat, "Bed");
+            PropBuilder.Bed(bed, BedTop, new Vector2(0f, -0.02f), 2.0f, 0.7f, false);   // head end toward -Z
+
+            bedSide = new GameObject("Bed (side-lying)").transform;   // across the view, for front-view side-lying
+            bedSide.SetParent(transform, false);
+            var pillow = PropBuilder.Bed(bedSide, BedTop, Vector2.zero, 2.0f, 0.7f, true);
+            pillow.localPosition = new Vector3(Mathf.Abs(pillow.localPosition.x), pillow.localPosition.y, pillow.localPosition.z);   // head toward +X
 
             ghostPivot = new GameObject("Target ghost").transform;
             ghostPivot.SetParent(body, false);
@@ -132,41 +136,50 @@ namespace TheraQuest
             activeRenderers = list.ToArray();
         }
 
-        static bool FrontView(string code) => code == "shoulderAbd" || code == "scaption" || code == "hipAbd";
+        static bool FrontView(string code) => code == "shoulderAbd" || code == "scaption" || code == "hipAbd" || code == "sidelyingHipAbd";
+        static bool ArmGhost(string code) => code == "shoulderAbd" || code == "scaption" || code == "shoulderFlex" || code == "wallSlide" ||
+                                             code == "forwardReach" || code == "supineFlex" || code == "shoulderExt";
 
         void Configure(ExerciseDef ex)
         {
             string code = currentCode = ex.code;
             currentSide = ex.side;
             posture = code == "kneeExt" || code == "sitToStand" ? Posture.Seated
-                    : code == "slr" || code == "heelSlide" ? Posture.Lying : Posture.Standing;
+                    : code == "slr" || code == "heelSlide" || code == "supineFlex" ? Posture.Lying
+                    : code == "sidelyingHipAbd" ? Posture.SideLying : Posture.Standing;
             chair.gameObject.SetActive(posture == Posture.Seated);
             bed.gameObject.SetActive(posture == Posture.Lying);
+            bedSide.gameObject.SetActive(posture == Posture.SideLying);
 
             // Front view for movements out to the side, side view for forward/backward ones,
             // matching where the camera should be. Left side = mirrored figure.
             bool left = ex.side == "L";
-            transform.localScale = new Vector3(left ? -1f : 1f, 1f, 1f);
+            mirror = left ? -1f : 1f;
+            transform.localScale = new Vector3(mirror, 1f, 1f);
+            popTime = 0f;
             transform.localRotation = Quaternion.Euler(0, FrontView(code) ? 0f : left ? 90f : -90f, 0);
 
             // Lying on the back: head away from the feet along the bed, face up.
-            body.localRotation = posture == Posture.Lying ? Quaternion.Euler(-90, 0, 0) : Quaternion.identity;
-            body.localPosition = posture == Posture.Lying ? new Vector3(0, BedTop + 0.1f, 0.8f) : Vector3.zero;
+            // Side-lying: rolled onto the left side, so the right (moving) leg is on top; hips over the bed's middle.
+            body.localRotation = posture == Posture.Lying ? Quaternion.Euler(-90, 0, 0)
+                               : posture == Posture.SideLying ? Quaternion.Euler(0, 0, -90) : Quaternion.identity;
+            body.localPosition = posture == Posture.Lying ? new Vector3(0, BedTop + 0.1f, 0.8f)
+                               : posture == Posture.SideLying ? new Vector3(-0.92f, BedTop + 0.18f, 0f) : Vector3.zero;
 
             rUpperArm.localRotation = rForearm.localRotation = lUpperArm.localRotation = Quaternion.identity;
             rThigh.localRotation = rShin.localRotation = lThigh.localRotation = lShin.localRotation = Quaternion.identity;
             if (code == "slr") { lThigh.localRotation = Flex(45); lShin.localRotation = Bend(90); } // other knee bent, foot flat
 
-            if (code == "elbowFlex") Ghost(rUpperArm, rForearm.localPosition, Forearm);
-            else if (code == "shoulderAbd" || code == "scaption" || code == "shoulderFlex" || code == "wallSlide")
-                Ghost(body, rUpperArm.localPosition, UpperArm + Forearm);
-            else if (code == "hipAbd" || code == "slr") Ghost(body, rThigh.localPosition, Thigh + Shin);
+            if (ex.joint == "Elbow") Ghost(rUpperArm, rForearm.localPosition, Forearm);
+            else if (ArmGhost(code)) Ghost(body, rUpperArm.localPosition, UpperArm + Forearm);
+            else if (code == "hipAbd" || code == "sidelyingHipAbd" || code == "slr" || code == "hipExt")
+                Ghost(body, rThigh.localPosition, Thigh + Shin);
             else if (code == "march") Ghost(body, rThigh.localPosition, Thigh);
             else Ghost(rThigh, rShin.localPosition, Shin);   // knee exercises: target knee angle
 
             // Colour the moving limb (done after the ghost is re-parented; SetActiveLimb skips it).
-            if (code == "elbowFlex") SetActiveLimb(rForearm);
-            else if (code == "kneeExt") SetActiveLimb(rShin);
+            if (ex.joint == "Elbow") SetActiveLimb(rForearm);
+            else if (code == "kneeExt" || code == "hamstringCurl") SetActiveLimb(rShin);
             else if (ex.joint == "Hip" || ex.joint == "Knee") SetActiveLimb(rThigh);
             else SetActiveLimb(rUpperArm);
         }
@@ -190,11 +203,12 @@ namespace TheraQuest
         {
             switch (code)
             {
-                case "shoulderAbd": case "hipAbd": return Abduct(target);
+                case "shoulderAbd": case "hipAbd": case "sidelyingHipAbd": return Abduct(target);
                 case "scaption": return Scaption(target);
-                case "heelSlide": case "miniSquat": return Bend(target);
+                case "shoulderExt": case "hipExt": return Flex(-target);
+                case "heelSlide": case "miniSquat": case "kneeWallSlide": case "miniLunge": case "hamstringCurl": return Bend(target);
                 case "kneeExt": case "sitToStand": return Bend(90f - target);
-                default: return Flex(target);   // shoulderFlex, wallSlide, elbowFlex, march, slr
+                default: return Flex(target);   // shoulderFlex, wallSlide, forwardReach, supineFlex, elbow exercises, march, slr
             }
         }
 
@@ -205,14 +219,27 @@ namespace TheraQuest
             {
                 case "shoulderAbd": rUpperArm.localRotation = Abduct(a); break;
                 case "scaption": rUpperArm.localRotation = Scaption(a); break;
-                case "shoulderFlex": case "wallSlide": rUpperArm.localRotation = Flex(a); break;
-                case "elbowFlex": rForearm.localRotation = Flex(a); break;
-                case "hipAbd": rThigh.localRotation = Abduct(a); break;
+                case "shoulderFlex": case "wallSlide": case "forwardReach": rUpperArm.localRotation = Flex(a); break;
+                case "supineFlex": rUpperArm.localRotation = lUpperArm.localRotation = Flex(a); break;   // both hands on the cane
+                case "shoulderExt": rUpperArm.localRotation = Flex(-a); break;
+                case "elbowFlex": case "bicepsCurl": rForearm.localRotation = Flex(a); break;
+                case "wallPushUp":                                                                   // hands stay on the wall
+                    rUpperArm.localRotation = Flex(90f - a / 2f); rForearm.localRotation = Flex(a);
+                    lUpperArm.localRotation = Flex(90f - a / 4f);
+                    break;
+                case "hipAbd": case "sidelyingHipAbd": rThigh.localRotation = Abduct(a); break;
+                case "hipExt": rThigh.localRotation = Flex(-a); break;
+                case "hamstringCurl": rShin.localRotation = Bend(a); break;
+                case "miniLunge":                                                                    // right leg in front
+                    rThigh.localRotation = Flex(a * 0.55f); rShin.localRotation = Bend(a);
+                    lThigh.localRotation = Flex(-15f - a * 0.2f); lShin.localRotation = Bend(a * 0.6f);
+                    body.localPosition = new Vector3(0, -(Thigh + Shin) * (1f - Mathf.Cos(a / 2f * Mathf.Deg2Rad)) * 0.8f, 0);
+                    break;
                 case "slr": rThigh.localRotation = Flex(a); break;
                 case "march": rThigh.localRotation = Flex(a); rShin.localRotation = Bend(a); break;   // shin stays vertical
                 case "heelSlide":                                                                    // heel stays on the bed
                     rThigh.localRotation = Flex(a / 2f); rShin.localRotation = Bend(a); break;
-                case "miniSquat":                                                                    // feet stay on the floor
+                case "miniSquat": case "kneeWallSlide":                                              // feet stay on the floor
                     rThigh.localRotation = lThigh.localRotation = Flex(a / 2f);
                     rShin.localRotation = lShin.localRotation = Bend(a);
                     body.localPosition = new Vector3(0, -(Thigh + Shin) * (1f - Mathf.Cos(a / 2f * Mathf.Deg2Rad)), 0);
@@ -235,8 +262,17 @@ namespace TheraQuest
         public void Show(ExerciseDef ex, float angle, Tone tone)
         {
             if (ex == null) return;
-            if (ex.code != currentCode || ex.side != currentSide) Configure(ex);
-            Pose(ex.code, angle);
+            if (ex.code != currentCode || ex.side != currentSide) { Configure(ex); shown = angle; shownVel = 0f; }
+            // Smooth the live angle so tracker jitter and low frame rates don't make the figure twitch
+            float dt = Time.deltaTime;
+            shown = Mathf.SmoothDamp(shown, angle, ref shownVel, 0.12f, Mathf.Infinity, Mathf.Max(dt, 1e-5f));
+            Pose(ex.code, shown);
+
+            // Springy pop when the exercise changes (grows from the floor with a slight overshoot)
+            popTime += Time.unscaledDeltaTime;
+            float x = Mathf.Clamp01(popTime / 0.35f) - 1f;
+            float k = 0.6f + 0.4f * (1f + 2.70158f * x * x * x + 1.70158f * x * x);
+            transform.localScale = new Vector3(mirror * k, k, k);
             ghostPivot.localRotation = GhostPose(ex.code, ex.targetAngle);
 
             active.color = tone == Tone.Neutral ? new Color(0.94f, 0.71f, 0.24f) : FeedbackManager.ToneColor(tone);

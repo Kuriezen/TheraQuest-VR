@@ -16,6 +16,7 @@ API (used by Unity and the dashboard)
   POST /api/patients/{id}/exercises          add one from the library  {"code": "slr"}
   DELETE /api/patients/{id}/exercises/{eid}  remove one (its history is kept)
   POST /api/sessions                         Unity uploads a finished session
+  PUT  /api/sessions/{id}/clinical           therapist records pain, soreness and swelling for a session
   GET  /api/patients/{id}/dashboard          adherence + performance analytics
 """
 import argparse
@@ -35,76 +36,201 @@ BADGES = {
     "fullrom": "Bullseye", "streak3": "On a roll", "adh80": "Consistent", "lv5": "Level 5",
 }
 
-# Exercise library: every movement the tracker can measure with one webcam.
+# Exercise library: every movement the tracker can measure with one webcam (2D, one plane of motion).
 # `code` drives the Unity coach figure and posture checks; `measure` is the tracker angle.
-# PLACEHOLDER NUMBERS: targets, tolerances, safety limits, holds, sets and rest must come
-# from your physical therapist's protocol. The therapist can change them per patient.
+# Default numbers are starting points; the protocol phase or the therapist sets the real prescription.
 #   code: (name, joint, measure, view, start position, target, tol, safety max, hold s, sets, reps, rest s, cue)
 LIBRARY = {
+    # Shoulder
     "shoulderAbd":  ("Shoulder abduction", "Shoulder", "shoulderElev", "front", "Standing, arm at your side, thumb up",
-                     90, 10, 120, 0, 1, 8, 30, "Raise your arm out to the side"),
-    "shoulderFlex": ("Shoulder flexion", "Shoulder", "shoulderElev", "side", "Standing, arm at your side, thumb forward",
-                     90, 10, 120, 0, 1, 8, 30, "Raise your straight arm forward and up"),
-    "scaption":     ("Scaption", "Shoulder", "shoulderElev", "front", "Standing, arm slightly forward, thumb up",
-                     90, 10, 120, 0, 1, 8, 30, "Raise your arm at a slight angle in front of you"),
-    "wallSlide":    ("Wall slide", "Shoulder", "shoulderElev", "side", "Facing a wall, forearm resting on it",
-                     120, 10, 150, 2, 1, 8, 30, "Slide your hand up the wall"),
+                     90, 10, 120, 0, 2, 8, 30, "Raise your arm out to the side"),
+    "shoulderFlex": ("Active shoulder elevation", "Shoulder", "shoulderElev", "side", "Standing, arm at your side, thumb forward",
+                     120, 10, 140, 0, 2, 8, 30, "Raise your straight arm forward and up"),
+    "forwardReach": ("Active forward reach", "Shoulder", "shoulderElev", "side", "Standing, arm at your side",
+                     90, 10, 110, 0, 2, 8, 30, "Reach forward to shoulder height, elbow straight"),
+    "supineFlex":   ("Supine shoulder flexion with cane", "Shoulder", "shoulderElev", "side",
+                     "Lying on your back, holding a cane with both hands", 100, 10, 140, 0, 2, 8, 30,
+                     "Let your good arm help lift the cane up and overhead"),
+    "scaption":     ("Full can (scaption)", "Shoulder", "shoulderElev", "front", "Standing, arm slightly forward, thumb up",
+                     90, 10, 110, 0, 2, 8, 30, "Raise your arm at a slight angle in front of you, thumb up"),
+    "wallSlide":    ("Wall slide (shoulder)", "Shoulder", "shoulderElev", "side", "Facing a wall, forearm resting on it",
+                     120, 10, 140, 2, 2, 8, 30, "Slide your hand up the wall"),
+    "shoulderExt":  ("Shoulder extension, straight arm", "Shoulder", "shoulderElev", "side", "Standing, arm at your side",
+                     45, 10, 60, 0, 2, 8, 30, "Move your straight arm back behind you"),
+    # Elbow
     "elbowFlex":    ("Elbow flexion", "Elbow", "elbowFlex", "side", "Standing, elbow at your side",
-                     130, 10, 150, 0, 1, 8, 30, "Bend your elbow and bring your hand up"),
+                     130, 10, 150, 0, 2, 8, 30, "Bend your elbow and bring your hand up"),
+    "bicepsCurl":   ("Biceps curl", "Elbow", "elbowFlex", "side", "Standing, elbow at your side, palm up",
+                     130, 10, 150, 0, 2, 10, 30, "Curl your hand up toward your shoulder"),
+    "wallPushUp":   ("Wall push-up", "Elbow", "elbowFlex", "side", "Facing a wall, hands on it at shoulder height",
+                     90, 10, 0, 0, 2, 8, 30, "Bend your elbows to bring your chest toward the wall"),
+    # Hip
     "hipAbd":       ("Standing hip abduction", "Hip", "hipElev", "front", "Standing, holding a chair for balance",
-                     25, 5, 40, 2, 1, 8, 30, "Lift your leg out to the side, toes forward"),
+                     25, 5, 40, 0, 2, 8, 30, "Lift your leg out to the side, toes forward"),
+    "sidelyingHipAbd": ("Side-lying hip abduction", "Hip", "hipElev", "front", "Lying on your good side, operated leg on top",
+                     25, 5, 40, 0, 2, 8, 30, "Lift your top leg toward the ceiling, toes forward"),
+    "hipExt":       ("Standing hip extension", "Hip", "hipElev", "side", "Standing, holding a chair for balance",
+                     20, 5, 30, 0, 2, 8, 30, "Move your straight leg back without leaning forward"),
     "slr":          ("Straight leg raise", "Hip", "hipElev", "side", "Lying on your back, other knee bent",
-                     45, 5, 60, 3, 2, 8, 30, "Tighten your thigh and lift your straight leg"),
+                     45, 5, 60, 0, 2, 8, 30, "Tighten your thigh and lift your straight leg"),
     "march":        ("Standing march", "Hip", "hipElev", "side", "Standing, holding a chair for balance",
-                     70, 10, 100, 0, 1, 10, 30, "Lift your knee up toward your chest"),
-    "kneeExt":      ("Seated knee extension", "Knee", "kneeExt", "side", "Sitting tall, knee bent at 90",
-                     80, 10, 0, 0, 1, 8, 30, "Sit tall and straighten your knee slowly"),
+                     70, 10, 100, 0, 2, 8, 30, "Lift your knee up toward your chest"),
+    # Knee
+    "kneeExt":      ("Seated knee extension (LAQ)", "Knee", "kneeExt", "side", "Sitting tall, knee bent at 90°",
+                     85, 10, 0, 0, 2, 8, 30, "Straighten your knee slowly, then lower it slowly"),
     "heelSlide":    ("Heel slide", "Knee", "kneeFlex", "side", "Lying on your back, legs straight",
                      90, 10, 110, 0, 2, 8, 30, "Slide your heel toward you, bending your knee"),
+    "hamstringCurl": ("Standing hamstring curl", "Knee", "kneeFlex", "side", "Standing, holding a chair for balance",
+                     90, 10, 120, 0, 2, 8, 30, "Bend your knee to bring your heel toward your buttock"),
     "miniSquat":    ("Mini squat", "Knee", "kneeFlex", "side", "Standing, holding a chair, feet hip-width",
-                     45, 10, 60, 0, 1, 8, 30, "Bend your knees a little, chest up"),
+                     30, 10, 50, 0, 2, 8, 30, "Bend your knees a little, chest up"),
+    "miniLunge":    ("Mini lunge", "Knee", "kneeFlex", "side", "Standing, operated leg a step forward, holding a chair",
+                     45, 10, 70, 0, 2, 8, 30, "Bend your front knee and lower your body a little"),
+    "kneeWallSlide": ("Wall slide to 90° (knee)", "Knee", "kneeFlex", "side", "Back against a wall, feet a step forward",
+                     90, 10, 100, 0, 2, 8, 30, "Slide down the wall until your knees bend to 90°"),
     "sitToStand":   ("Sit to stand", "Knee", "kneeExt", "side", "Sitting on a firm chair, feet flat",
-                     85, 10, 0, 0, 1, 6, 30, "Lean forward and stand up tall"),
+                     85, 10, 0, 0, 2, 8, 45, "Lean forward and stand up tall"),
 }
 
-# Example protocols, loaded once into the protocol tables. They follow the structure of published
-# post-op protocols, but EVERY NUMBER IS A PLACEHOLDER: replace them with the protocol your partner
-# physical therapist actually uses, and have them sign it off. Phases with vr=False are immobilization
-# or passive-motion phases done with the therapist; TheraQuest is only for active-ROM phases.
+# Normal adult range of motion for each exercise's joint motion (AAOS values as tabulated in
+# Norkin & White, Measurement of Joint Motion: A Guide to Goniometry). Shown to the therapist next to the
+# prescription, with a warning when a target or safety max goes past it. Check against your edition.
+#   code: (joint motion, normal maximum in the tracker's degrees)
+NORMAL_ROM = {
+    "shoulderAbd": ("Shoulder abduction 0-180°", 180), "shoulderFlex": ("Shoulder flexion 0-180°", 180),
+    "forwardReach": ("Shoulder flexion 0-180°", 180), "supineFlex": ("Shoulder flexion 0-180°", 180),
+    "scaption": ("Shoulder elevation 0-180°", 180), "wallSlide": ("Shoulder flexion 0-180°", 180),
+    "shoulderExt": ("Shoulder extension 0-60°", 60),
+    "elbowFlex": ("Elbow flexion 0-150°", 150), "bicepsCurl": ("Elbow flexion 0-150°", 150),
+    "wallPushUp": ("Elbow flexion 0-150°", 150),
+    "hipAbd": ("Hip abduction 0-45°", 45), "sidelyingHipAbd": ("Hip abduction 0-45°", 45),
+    "hipExt": ("Hip extension 0-30°", 30), "slr": ("Hip flexion 0-120°", 120), "march": ("Hip flexion 0-120°", 120),
+    "kneeExt": ("Knee extension to 0° (90 on this scale = straight)", 90),
+    "sitToStand": ("Knee extension to 0° (90 on this scale = straight)", 90),
+    "heelSlide": ("Knee flexion 0-135°", 135), "hamstringCurl": ("Knee flexion 0-135°", 135),
+    "miniSquat": ("Knee flexion 0-135°", 135), "miniLunge": ("Knee flexion 0-135°", 135),
+    "kneeWallSlide": ("Knee flexion 0-135°", 135),
+}
+
+# Protocols from the published documents, loaded into the protocol tables.
+#   - Phases, goals, precautions, ROM goals and progression rules follow the documents.
+#   - Each VR phase holds the protocol's exercises that one webcam can measure; the rest are listed
+#     under `other` (done without the camera: isometrics, rotation, bike, manual therapy, ...).
+#   - The protocols don't give angles or reps for most exercises; those numbers are starting points
+#     (OHSU's "2x8" progression rule is used for sets x reps). Have your physical therapist confirm them.
+# Phases with vr=False (immobilization, passive motion, return to sport) have no VR session.
 #   protocol: (name, condition, source, [phases])
-#   phase:    (name, weeks, vr, goals, precautions, [(code, target, tol, safety max, hold s, sets, reps, rest s)])
+#   phase:    (name, weeks, vr, goals, precautions, ROM goal, other exercises, max pain increase,
+#              check soreness < 2 h, max swelling cm or None,
+#              [(code, target, tol, safety max, hold s, sets, reps, rest s)])
+PROTOCOL_VERSION = "2"
+OHSU_RULES = "Progress when 2x8 reps are done with pain up by no more than 2 points, swelling up by under 2 cm and soreness gone within 2 hours"
 PROTOCOLS = [
-    ("Total knee replacement", "Post-op total knee arthroplasty", "Structure after OHSU Rehab Protocols - Total Knee (Nov 2023)", [
-        ("Phase I", "Weeks 0-2", True, "Knee flexion at least 90°, full extension, independent straight leg raise",
-         "No pillow under the knee; no kneeling",
-         [("heelSlide", 90, 10, 100, 0, 2, 8, 30), ("kneeExt", 75, 10, 0, 0, 2, 8, 30), ("slr", 40, 5, 55, 3, 2, 8, 30)]),
-        ("Phase II", "Weeks 2-6", True, "Knee flexion 0-110°, normal walking pattern",
-         "Stop if pain rises more than 2 points or soreness lasts over 2 hours",
-         [("heelSlide", 110, 10, 120, 0, 2, 8, 30), ("kneeExt", 85, 10, 0, 2, 2, 8, 30),
-          ("miniSquat", 30, 10, 45, 0, 2, 8, 30), ("sitToStand", 85, 10, 0, 0, 2, 6, 45)]),
-        ("Phase III", "Weeks 6-12", True, "Knee flexion 0-120°, functional strength and balance",
-         "No running or jumping",
-         [("heelSlide", 120, 10, 130, 0, 2, 10, 30), ("miniSquat", 45, 10, 60, 2, 2, 8, 30),
-          ("sitToStand", 85, 10, 0, 0, 2, 8, 45), ("march", 70, 10, 100, 0, 2, 10, 30), ("hipAbd", 25, 5, 40, 2, 2, 8, 30)]),
+    ("Total knee replacement (OHSU)", "Post-op total knee arthroplasty",
+     "OHSU Health Total Knee Best Practice Rehab Guideline, HC-REH-400.30.3-ROP-GUD (Nov 2023)", [
+        ("Phase I - Immediate post-op", "From hospital discharge (0-90° by week 1)", True,
+         "Active quad contraction; passive knee extension to 0°; knee flexion to at least 90°; walking with a device; swelling control",
+         "Monitor wound healing and excess swelling; watch for signs of DVT. " + OHSU_RULES,
+         "Knee ROM better than 5°-90°",
+         "Ankle pumps, passive knee extension stretches, quad sets, stationary bike or recumbent stepper without resistance, "
+         "hamstring and calf stretches, gait training, ice and elevation",
+         2, True, 2.0,
+         [("heelSlide", 90, 10, 100, 0, 2, 8, 30), ("kneeExt", 80, 10, 0, 0, 2, 8, 30),
+          ("miniSquat", 30, 10, 45, 0, 2, 8, 30), ("sidelyingHipAbd", 25, 5, 40, 0, 2, 8, 30)]),
+        ("Phase II - Motion and mobility", "About weeks 2-6", True,
+         "Active ROM 0-110°; quadriceps strengthening; proprioception and endurance; normal gait; gradual return to daily activity",
+         OHSU_RULES,
+         "Knee ROM better than 5°-110°",
+         "Standing calf raises, stationary bike (no or light resistance), single-leg stance, step ups and downs, "
+         "stretching (hamstring, quads, calf), walking program 30 min a day",
+         2, True, 2.0,
+         [("kneeExt", 85, 10, 0, 0, 2, 8, 30), ("slr", 45, 5, 60, 0, 2, 8, 30), ("hamstringCurl", 90, 10, 110, 0, 2, 8, 30),
+          ("hipAbd", 25, 5, 40, 0, 2, 8, 30), ("hipExt", 20, 5, 30, 0, 2, 8, 30), ("sitToStand", 85, 10, 0, 0, 2, 8, 45),
+          ("march", 70, 10, 100, 0, 2, 8, 30), ("miniLunge", 30, 10, 50, 0, 2, 8, 30), ("heelSlide", 110, 10, 120, 0, 2, 8, 30)]),
+        ("Phase III - Intermediate", "About weeks 6-10", True,
+         "Active ROM 0-120°; closed-chain exercise; proprioception; normal gait; light recreational activity",
+         OHSU_RULES,
+         "Knee ROM 0°-120° with good quad control",
+         "Leg press, calf press, step ups and side step ups, single-limb stance on foam, star excursion balance, "
+         "tilt-board squats, stability-ball hip extension, aquatic therapy, bike (+10% resistance every 2 weeks)",
+         2, True, 2.0,
+         [("kneeExt", 90, 5, 0, 0, 2, 8, 30), ("hipExt", 25, 5, 30, 0, 2, 8, 30), ("hipAbd", 30, 5, 45, 0, 2, 8, 30),
+          ("miniLunge", 60, 10, 80, 0, 2, 8, 30), ("kneeWallSlide", 90, 10, 100, 0, 2, 8, 30), ("heelSlide", 120, 10, 130, 0, 2, 8, 30)]),
+        ("Phase IV - Advanced strengthening", "Most patients finish by week 12", True,
+         "Maximize ROM; good lower-limb strength; return to desired activities; independent home program",
+         OHSU_RULES,
+         "Expected ROM achieved (normal pre-op knee: 0-120 to 130°)",
+         "Eccentric leg press and calf press, step ups and downs, star excursion reaching, ball bridge with curl, "
+         "agility (side shuffle, backward walking, braiding), single-leg stance, 30+ min walking or cycling a day",
+         2, True, 2.0,
+         [("kneeExt", 90, 5, 0, 0, 2, 8, 30), ("hipExt", 25, 5, 30, 0, 2, 8, 30), ("hipAbd", 30, 5, 45, 0, 2, 8, 30),
+          ("miniLunge", 60, 10, 80, 0, 2, 8, 30), ("kneeWallSlide", 90, 10, 100, 5, 2, 8, 30)]),
+        ("Phase V - Return to advanced activities", "As needed, 2x a month", False,
+         "Full pain-free ROM; minimal swelling; return to recreational activities", "",
+         "Full pain-free ROM", "Sports-specific movements; golf, doubles tennis, walking, hiking or biking program",
+         2, True, 2.0, []),
     ]),
-    ("Rotator cuff repair (large to massive)", "Post-op rotator cuff repair",
-     "Structure after Mass General Brigham - Rotator Cuff Tear (Large to Massive) Protocol", [
-        ("Phase I", "Weeks 0-6", False, "Protect the repair in the sling", "No shoulder motion", []),
-        ("Phase II", "Weeks 6-12", False, "Passive range of motion with the therapist",
-         "Passive only: forward elevation 0-100°, external rotation 0-30°", []),
-        ("Phase III", "Weeks 12-16", True, "Active range of motion, forward elevation toward 120°",
-         "No lifting; stop if pain rises",
-         [("shoulderFlex", 100, 10, 120, 0, 2, 8, 30), ("scaption", 90, 10, 110, 0, 2, 8, 30), ("wallSlide", 110, 10, 130, 2, 2, 8, 30)]),
-        ("Phase IV", "Weeks 16+", True, "Full active range of motion, early strengthening",
-         "No heavy or overhead lifting",
-         [("shoulderFlex", 140, 10, 160, 0, 3, 10, 30), ("shoulderAbd", 120, 10, 150, 0, 3, 10, 30), ("scaption", 120, 10, 150, 2, 3, 10, 30)]),
+    ("Rotator cuff repair, large to massive (MGB)", "Post-op arthroscopic rotator cuff repair",
+     "Mass General Brigham Sports Medicine - Rehabilitation Protocol for Arthroscopic Rotator Cuff Repair, Large to Massive Tears", [
+        ("Phase I - Immediate post-op (immobilization)", "Weeks 1-6", False,
+         "Protect the repair and promote tendon-to-bone healing; sling for 6 weeks (abduction pillow 30-45°); reduce pain and inflammation",
+         "Do not actively move the surgical arm; no weight bearing through it; no passive or active shoulder ROM; "
+         "no reaching overhead or behind the back; no pushing or pulling",
+         "Appropriate healing; pain and inflammation controlled",
+         "Hand, wrist and elbow AROM (no active elbow ROM for 4 weeks after biceps tenodesis); scapular mobility in the sling",
+         0, False, None, []),
+        ("Phase II - Passive ROM", "Weeks 6-10", False,
+         "Minimize stiffness while protecting the repair; passive ROM with the therapist; home exercise program",
+         "No active shoulder ROM; avoid aggressive or painful passive ROM; no internal rotation (behind the back); "
+         "no weight bearing on the arm",
+         "Passive forward elevation 100-120°, passive ER 25-45° at neutral, passive abduction 90°",
+         "Supine passive elevation 0-100° and seated passive ER 0-30° with the PT, table slide, pendulums, "
+         "scapular retraction, elevation and depression",
+         0, False, None, []),
+        ("Phase III - Active-assisted, then active ROM", "Weeks 10-18", True,
+         "Active-assisted ROM (weeks 10-14), then active ROM (weeks 14-18); normal daily activities. "
+         "Wall slide from week 12; forward reach and active elevation from week 14",
+         "No lifting or painful activities; no supporting body weight on the arms; no excessive behind-the-back "
+         "movement; no sudden or jerking motions",
+         "Active forward elevation over 120° without compensation (passive over 140°)",
+         "Supine cane abduction and external rotation, assisted ER, standing and side-lying ER AROM (rotation can't "
+         "be measured with one camera), submaximal isometrics, standing rows, manual therapy",
+         0, False, None,
+         [("supineFlex", 100, 10, 140, 0, 2, 8, 30), ("wallSlide", 120, 10, 140, 0, 2, 8, 30),
+          ("forwardReach", 90, 10, 110, 0, 2, 8, 30), ("shoulderFlex", 120, 10, 140, 0, 2, 8, 30)]),
+        ("Phase IV - Initial strengthening", "Weeks 18-22", True,
+         "Full ROM; gradually restore strength, power and endurance; full daily activities and work",
+         "No lifting over 5 lb; no sudden lifting, jerking, pushing or throwing; no straight-arm lateral raise "
+         "(long-lever abduction); never raise the arm in the empty-can position",
+         "Full ROM in all planes with normal movement",
+         "Pec, internal-rotation, doorway ER, cross-body and sleeper stretches; prone W, Y, T, I; supine protraction; "
+         "rows; resisted ER and IR; triceps extension; rhythmic stabilization",
+         0, False, None,
+         [("shoulderExt", 45, 10, 60, 0, 2, 8, 30), ("forwardReach", 90, 10, 110, 0, 2, 8, 30),
+          ("bicepsCurl", 130, 10, 150, 0, 2, 10, 30), ("shoulderFlex", 150, 10, 170, 0, 2, 8, 30)]),
+        ("Phase V - Advanced strengthening", "Weeks 22-26", True,
+         "Restore maximal strength, power and endurance; keep pain-free ROM",
+         "No lifting over 10 lb; no overhead lifting; no sudden pushing or lifting; nothing painful",
+         "Full, pain-free ROM without compensation",
+         "ER at 45° and 90° abduction, IR at 90° abduction, PNF D1/D2 diagonals, dynamic hug, counter and floor push-ups",
+         0, False, None,
+         [("scaption", 90, 10, 110, 0, 2, 10, 30), ("wallPushUp", 90, 10, 0, 0, 2, 8, 30),
+          ("shoulderExt", 45, 10, 60, 0, 2, 10, 30), ("bicepsCurl", 130, 10, 150, 0, 2, 10, 30)]),
+        ("Phase VI - Return to sport", "Weeks 26-30", False,
+         "Keep ROM; progress strength (85-90% of the other side); return to work, recreation or sport",
+         "No forceful or heavy lifting; no sudden pushing or lifting; nothing painful",
+         "Full ROM and strength", "Daily home stretching; strengthening 3 days a week; activity-specific progression",
+         0, False, None, []),
     ]),
 ]
 
 # Columns added after the first version; added to existing databases on startup.
 MIGRATIONS = {
     "patient": [("phase_id", "INTEGER"), ("phase_started_at", "TEXT")],
-    "session": [("pain_before", "INTEGER"), ("pain_after", "INTEGER")],
+    "session": [("pain_before", "INTEGER"), ("pain_after", "INTEGER"),
+                ("soreness_over_2h", "INTEGER"), ("swelling_cm", "REAL")],
+    "protocol_phase": [("rom_goal", "TEXT"), ("other_exercises", "TEXT"),
+                       ("check_soreness", "INTEGER NOT NULL DEFAULT 0"), ("max_swelling_cm", "REAL")],
     "exercise": [("measure", "TEXT"), ("view", "TEXT"), ("position", "TEXT"),
                  ("side", "TEXT NOT NULL DEFAULT ''"), ("safety_max", "REAL NOT NULL DEFAULT 0"),
                  ("hold_seconds", "REAL NOT NULL DEFAULT 0"), ("sets", "INTEGER NOT NULL DEFAULT 1"),
@@ -128,10 +254,27 @@ def init_db():
     migrate(con)
     if con.execute("SELECT COUNT(*) FROM physical_therapist").fetchone()[0] == 0:
         seed(con)
-    if con.execute("SELECT COUNT(*) FROM protocol").fetchone()[0] == 0:
-        seed_protocols(con)
+    version = con.execute("SELECT value FROM app_meta WHERE key='protocol_version'").fetchone()
+    if not version or version[0] != PROTOCOL_VERSION:
+        replace_protocols(con)
     con.commit()
     con.close()
+
+
+def replace_protocols(con):
+    """
+    Loads PROTOCOLS, replacing older built-in protocol data. Patients on an old phase keep their
+    exercises as a custom program; their phase history stays, marked as the old version.
+    """
+    if con.execute("SELECT COUNT(*) FROM protocol").fetchone()[0]:
+        con.execute("UPDATE patient SET phase_id=NULL, phase_started_at=NULL WHERE phase_id IS NOT NULL")
+        con.execute("""UPDATE phase_history SET note = TRIM(COALESCE(note,'') || ' (earlier protocol version)'), phase_id=NULL
+                       WHERE phase_id IS NOT NULL""")
+        con.execute("DELETE FROM phase_exercise")
+        con.execute("DELETE FROM protocol_phase")
+        con.execute("DELETE FROM protocol")
+    seed_protocols(con)
+    con.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES ('protocol_version', ?)", (PROTOCOL_VERSION,))
 
 
 def migrate(con):
@@ -165,9 +308,12 @@ def seed_protocols(con):
     for name, condition, source, phases in PROTOCOLS:
         prid = con.execute("INSERT INTO protocol(name, condition, source) VALUES (?,?,?)",
                            (name, condition, source)).lastrowid
-        for no, (pname, weeks, vr, goals, precautions, exs) in enumerate(phases, 1):
-            phid = con.execute("""INSERT INTO protocol_phase(protocol_id, phase_no, name, weeks, vr_allowed, goals, precautions)
-                                  VALUES (?,?,?,?,?,?,?)""", (prid, no, pname, weeks, int(vr), goals, precautions)).lastrowid
+        for no, (pname, weeks, vr, goals, precautions, rom_goal, other, pain, soreness, swelling, exs) in enumerate(phases, 1):
+            phid = con.execute("""INSERT INTO protocol_phase(protocol_id, phase_no, name, weeks, vr_allowed, goals, precautions,
+                                  rom_goal, other_exercises, max_pain_increase, check_soreness, max_swelling_cm)
+                                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               (prid, no, pname, weeks, int(vr), goals, precautions, rom_goal, other,
+                                pain, int(soreness), swelling)).lastrowid
             for i, (code, tgt, tol, smax, hold, sets, reps, rest) in enumerate(exs):
                 con.execute("""INSERT INTO phase_exercise(phase_id, code, target_angle, tolerance, safety_max,
                                hold_seconds, sets, reps, rest_seconds, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -265,10 +411,11 @@ def phase_info(con, p):
                                           WHERE ph.phase_id=?""", (p["phase_id"],)).fetchone()
     if not ph:
         return {"id": 0, "protocolId": 0, "protocol": "", "name": "", "phaseNo": 0, "weeks": "", "vrAllowed": True,
-                "goals": "", "precautions": "", "startedAt": ""}
+                "goals": "", "precautions": "", "romGoal": "", "other": "", "startedAt": ""}
     return {"id": ph["phase_id"], "protocolId": ph["protocol_id"], "protocol": ph["protocol"], "name": ph["name"],
             "phaseNo": ph["phase_no"], "weeks": ph["weeks"], "vrAllowed": bool(ph["vr_allowed"]),
-            "goals": ph["goals"], "precautions": ph["precautions"], "startedAt": p["phase_started_at"] or ""}
+            "goals": ph["goals"], "precautions": ph["precautions"], "romGoal": ph["rom_goal"] or "",
+            "other": ph["other_exercises"] or "", "startedAt": p["phase_started_at"] or ""}
 
 
 def set_phase(con, patient_id, body):
@@ -302,7 +449,8 @@ def readiness(con, p):
     Criteria, checked on the most recent `min_sessions` complete sessions in this phase:
       - enough complete sessions (every exercise reached all its sets and reps)
       - ROM goal: every exercise at or above `min_accuracy`
-      - pain after minus pain before at most `max_pain_increase` (pain must be recorded)
+      - pain after minus pain before at most `max_pain_increase` (recorded by the therapist)
+      - when the phase uses them: soreness gone within 2 hours, swelling increase under `max_swelling_cm`
       - no reps past the safety limit
     """
     if not p["phase_id"]:
@@ -318,7 +466,7 @@ def readiness(con, p):
 
     n, acc, pain = ph["min_sessions"], ph["min_accuracy"], ph["max_pain_increase"]
     rows = con.execute("""
-        SELECT s.started_at, s.pain_before, s.pain_after, MIN(r.avg_accuracy) AS min_acc,
+        SELECT s.started_at, s.pain_before, s.pain_after, s.soreness_over_2h, s.swelling_cm, MIN(r.avg_accuracy) AS min_acc,
                COALESCE(SUM(r.unsafe_reps),0) AS unsafe
         FROM session s LEFT JOIN performance_record r ON r.session_id = s.session_id
         WHERE s.patient_id=? AND s.status='complete' AND s.started_at>=?
@@ -333,11 +481,19 @@ def readiness(con, p):
 
     out["criteria"].append({"label": f"{n} complete sessions in this phase (all sets and reps done)", "met": enough,
                             "detail": f"{len(rows)} of {n}"})
-    crit(f"ROM goal: every exercise at {acc:.0f}% accuracy or more", all((r["min_acc"] or 0) >= acc for r in rows),
+    goal = f" ({ph['rom_goal']})" if ph["rom_goal"] else ""
+    crit(f"ROM goal{goal}: every exercise at {acc:.0f}% accuracy or more", all((r["min_acc"] or 0) >= acc for r in rows),
          ", ".join(f"{r['min_acc'] or 0:.0f}%" for r in rows))
-    crit(f"Pain went up by {pain} points or less", all(pain_ok(r) for r in rows),
-         ", ".join("not recorded" if r["pain_before"] is None or r["pain_after"] is None
+    crit("No increase in pain" if pain == 0 else f"Pain went up by {pain} points or less", all(pain_ok(r) for r in rows),
+         ", ".join("not recorded yet" if r["pain_before"] is None or r["pain_after"] is None
                    else f"{r['pain_before']}→{r['pain_after']}" for r in rows))
+    if ph["check_soreness"]:
+        crit("Soreness gone within 2 hours", all(r["soreness_over_2h"] == 0 for r in rows),
+             ", ".join({None: "not recorded yet", 0: "under 2 h", 1: "over 2 h"}[r["soreness_over_2h"]] for r in rows))
+    if ph["max_swelling_cm"] is not None:
+        lim = ph["max_swelling_cm"]
+        crit(f"Swelling up by less than {lim:g} cm", all(r["swelling_cm"] is not None and r["swelling_cm"] < lim for r in rows),
+             ", ".join("not recorded yet" if r["swelling_cm"] is None else f"{r['swelling_cm']:g} cm" for r in rows))
     crit("No reps past the safety limit", all(r["unsafe"] == 0 for r in rows),
          ", ".join(str(r["unsafe"]) for r in rows) + " unsafe reps")
     out["ready"] = nxt is not None and all(c["met"] for c in out["criteria"])
@@ -352,6 +508,7 @@ def list_protocols(con):
             exs = con.execute("SELECT code FROM phase_exercise WHERE phase_id=? ORDER BY sort_order", (ph["phase_id"],)).fetchall()
             phases.append({"id": ph["phase_id"], "phaseNo": ph["phase_no"], "name": ph["name"], "weeks": ph["weeks"],
                            "vrAllowed": bool(ph["vr_allowed"]), "goals": ph["goals"], "precautions": ph["precautions"],
+                           "romGoal": ph["rom_goal"] or "", "other": ph["other_exercises"] or "",
                            "exercises": [LIBRARY[e["code"]][0] for e in exs if e["code"] in LIBRARY]})
         out.append({"id": pr["protocol_id"], "name": pr["name"], "condition": pr["condition"], "source": pr["source"],
                     "phases": phases})
@@ -379,8 +536,25 @@ def get_program(con, patient_id):
             "targetAngle": e["target_angle"], "tolerance": e["tolerance"], "safetyMax": e["safety_max"],
             "holdSeconds": e["hold_seconds"], "sets": e["sets"], "restSeconds": e["rest_seconds"],
             "baseReps": e["reps"], "reps": effective_reps(e, prog["max_reps"]), "stage": e["stage"], "cue": e["cue"],
+            "normalRom": NORMAL_ROM.get(e["code"], ("", 0))[0], "normalMax": NORMAL_ROM.get(e["code"], ("", 0))[1],
         } for e in exs],
     }
+
+
+def record_clinical(con, session_id, body):
+    """Therapist records pain before/after (0-10), soreness over 2 hours (yes/no) and swelling (cm) for a session."""
+    if not con.execute("SELECT 1 FROM session WHERE session_id=?", (session_id,)).fetchone():
+        raise ValueError("Unknown session")
+
+    def num(key, cast, lo, hi):
+        v = body.get(key)
+        return None if v is None or v == "" else max(lo, min(hi, cast(v)))
+
+    con.execute("UPDATE session SET pain_before=?, pain_after=?, soreness_over_2h=?, swelling_cm=? WHERE session_id=?",
+                (num("pain_before", int, 0, 10), num("pain_after", int, 0, 10), num("soreness_over_2h", int, 0, 1),
+                 num("swelling_cm", float, 0, 20), session_id))
+    con.commit()
+    return {"ok": True}
 
 
 def save_session(con, body):
@@ -522,6 +696,7 @@ def dashboard(con, patient_id):
     since = (date.today() - timedelta(days=13)).isoformat()
     sessions = con.execute("""
         SELECT s.session_id, s.started_at, s.input_source, s.points, s.stars, s.status, s.pain_before, s.pain_after,
+               s.soreness_over_2h, s.swelling_cm,
                COALESCE(SUM(r.valid_reps),0) AS valid, COALESCE(SUM(r.attempts),0) AS attempts,
                CASE WHEN SUM(r.attempts)>0 THEN SUM(r.avg_accuracy*r.attempts)/SUM(r.attempts) ELSE 0 END AS accuracy,
                CASE WHEN SUM(r.attempts)>0 THEN SUM(r.mean_angle_error*r.attempts)/SUM(r.attempts) ELSE 0 END AS mean_err
@@ -593,8 +768,10 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 4 and parts[1] == "patients" and parts[3] == "phase" and method == "POST":
                     return self._send(200, set_phase(con, int(parts[2]), self._body()))
                 if method == "GET" and parts == ["api", "library"]:
-                    return self._send(200, [{"code": c, "name": v[0], "joint": v[1], "view": v[3], "position": v[4]}
-                                            for c, v in LIBRARY.items()])
+                    return self._send(200, [{"code": c, "name": v[0], "joint": v[1], "view": v[3], "position": v[4],
+                                             "normalRom": NORMAL_ROM.get(c, ("", 0))[0]} for c, v in LIBRARY.items()])
+                if len(parts) == 4 and parts[1] == "sessions" and parts[3] == "clinical" and method == "PUT":
+                    return self._send(200, record_clinical(con, int(parts[2]), self._body()))
                 if len(parts) == 4 and parts[1] == "patients" and parts[3] == "exercises" and method == "POST":
                     return self._send(201, change_exercises(con, int(parts[2]), method, self._body()))
                 if len(parts) == 5 and parts[1] == "patients" and parts[3] == "exercises" and method == "DELETE":

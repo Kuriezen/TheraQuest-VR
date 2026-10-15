@@ -13,6 +13,8 @@ namespace TheraQuest
     public class HeadTracking : MonoBehaviour
     {
         public float desktopEyeHeight = 1.55f;
+        /// <summary>Look up / down in desktop mode (set by PlayerMover from the mouse).</summary>
+        [HideInInspector] public float desktopPitch;
         public bool HeadsetActive { get; private set; }
 
         Transform rig;
@@ -33,7 +35,7 @@ namespace TheraQuest
             if (!HeadsetActive)
             {
                 transform.localPosition = new Vector3(0, desktopEyeHeight, 0);
-                transform.localRotation = Quaternion.identity;
+                transform.localRotation = Quaternion.Euler(desktopPitch, 0, 0);
                 return;
             }
 

@@ -15,3 +15,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Large third-party asset packs (GitHub limit is 100 MB per file); keep them local
+*.zip

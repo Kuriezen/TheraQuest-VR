@@ -150,6 +150,17 @@ namespace TheraQuest
             return "Good rep";
         }
 
+        /// <summary>Simple, encouraging version of <see cref="Describe"/> for the patient (no numbers).</summary>
+        public string Friendly(RepResult r)
+        {
+            if (r.pastSafetyMax) return "That went too far. Stay inside the safe zone";
+            if (r.fault != null) return r.fault;
+            if (r.overshoot) return "A bit too far. Stop at the star";
+            if (r.error > Exercise.tolerance) return "Go a little higher next time";
+            if (!r.heldLongEnough) return "Hold it at the top a little longer";
+            return "Good rep";
+        }
+
         public ExerciseResult ToResult()
         {
             float avgAcc = 0f, avgErr = 0f;

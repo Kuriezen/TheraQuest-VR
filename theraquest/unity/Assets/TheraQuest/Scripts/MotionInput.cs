@@ -20,7 +20,8 @@ namespace TheraQuest
         public float maxTrunkLean = 12f;     // degrees from vertical: shoulder exercises, hip abduction, march
         public float maxElbowDrift = 30f;    // upper arm away from trunk during elbow flexion
         public float maxKneeBend = 15f;      // knee must stay straight during a straight leg raise
-        public float maxSquatLean = 35f;     // forward trunk lean allowed in a mini squat
+        public float maxSquatLean = 35f;     // forward trunk lean allowed in a mini squat or lunge
+        public float maxThighSwing = 20f;    // thigh must stay pointing down during a hamstring curl
 
         [Header("Smoothing")]
         [Range(0f, 0.95f)] public float smoothing = 0.6f;
@@ -46,13 +47,16 @@ namespace TheraQuest
         {
             switch (code)
             {
-                case "shoulderAbd": case "shoulderFlex": case "scaption": case "wallSlide": return "Keep your trunk upright";
-                case "elbowFlex": return "Keep your elbow at your side";
+                case "shoulderAbd": case "shoulderFlex": case "scaption": case "wallSlide": case "forwardReach":
+                    return "Keep your trunk upright";
+                case "shoulderExt": case "hipExt": return "Don't lean forward";
+                case "elbowFlex": case "bicepsCurl": return "Keep your elbow at your side";
                 case "hipAbd": return "Don't lean to the side";
                 case "march": return "Stand tall, don't lean back";
                 case "slr": return "Keep your knee straight";
-                case "miniSquat": return "Keep your chest up";
-                default: return null;
+                case "hamstringCurl": return "Keep your thigh pointing down";
+                case "miniSquat": case "miniLunge": return "Keep your chest up";
+                default: return null;   // supineFlex, sidelyingHipAbd, wallPushUp, kneeWallSlide, heelSlide, kneeExt, sitToStand
             }
         }
 
@@ -60,12 +64,13 @@ namespace TheraQuest
         {
             switch (code)
             {
-                case "shoulderAbd": case "shoulderFlex": case "scaption": case "wallSlide":
-                case "hipAbd": case "march":
+                case "shoulderAbd": case "shoulderFlex": case "scaption": case "wallSlide": case "forwardReach":
+                case "shoulderExt": case "hipAbd": case "hipExt": case "march":
                     return p.trunkLean > maxTrunkLean;
-                case "elbowFlex": return (s == p ? p.elbowDrift : s.shoulderElev) > maxElbowDrift;
+                case "elbowFlex": case "bicepsCurl": return (s == p ? p.elbowDrift : s.shoulderElev) > maxElbowDrift;
                 case "slr": return s.kneeFlex > maxKneeBend;
-                case "miniSquat": return p.trunkLean > maxSquatLean;
+                case "hamstringCurl": return s.hipElev > maxThighSwing;
+                case "miniSquat": case "miniLunge": return p.trunkLean > maxSquatLean;
                 default: return false;
             }
         }

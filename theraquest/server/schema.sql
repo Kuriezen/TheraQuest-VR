@@ -34,10 +34,19 @@ CREATE TABLE IF NOT EXISTS protocol_phase (
   vr_allowed        INTEGER NOT NULL DEFAULT 1,    -- 0 = immobilization / passive phase, done with the therapist
   goals             TEXT,
   precautions       TEXT,
+  rom_goal          TEXT,                          -- the protocol's ROM milestone for this phase
+  other_exercises   TEXT,                          -- protocol exercises done without the camera
   -- Progression criteria (the system suggests the next phase; the therapist decides)
   min_sessions      INTEGER NOT NULL DEFAULT 3,    -- complete sessions in a row that must meet the criteria
   min_accuracy      REAL NOT NULL DEFAULT 85,      -- ROM goal: every exercise at or above this accuracy
-  max_pain_increase INTEGER NOT NULL DEFAULT 2     -- pain after - pain before, 0-10 scale
+  max_pain_increase INTEGER NOT NULL DEFAULT 2,    -- pain after - pain before, 0-10 scale (recorded by the therapist)
+  check_soreness    INTEGER NOT NULL DEFAULT 0,    -- 1 = soreness must be gone within 2 hours
+  max_swelling_cm   REAL                           -- swelling increase must stay under this; NULL = not used
+);
+
+CREATE TABLE IF NOT EXISTS app_meta (
+  key            TEXT PRIMARY KEY,
+  value          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS phase_exercise (
@@ -107,8 +116,11 @@ CREATE TABLE IF NOT EXISTS session (
   points         INTEGER NOT NULL DEFAULT 0,
   stars          INTEGER NOT NULL DEFAULT 0,
   status         TEXT NOT NULL,                    -- complete | incomplete
-  pain_before    INTEGER,                          -- 0-10 check-in in VR; NULL = not recorded
-  pain_after     INTEGER
+  -- Clinical notes the therapist records on the dashboard (NULL = not recorded)
+  pain_before    INTEGER,                          -- 0-10
+  pain_after     INTEGER,
+  soreness_over_2h INTEGER,                        -- 1 = soreness lasted more than 2 hours after exercise
+  swelling_cm    REAL                              -- swelling increase with exercise
 );
 
 CREATE TABLE IF NOT EXISTS performance_record (

@@ -76,6 +76,12 @@ td{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-
 .assign select{flex:1;min-width:140px}
 .hist{font-size:12.5px;color:var(--muted);margin:10px 0 0;padding-left:16px}
 .painup{color:var(--bad);font-weight:600}
+.clin{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.clin input[type=number]{width:56px}
+.clin select{padding:4px;font-size:12.5px}
+.btn.sm{padding:4px 10px;font-size:12.5px}
+.warnrom{color:var(--warn);font-weight:600}
+.other{font-size:12.5px;color:var(--muted);margin-top:8px}
 .days{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 12px}
 .days label{display:inline-flex;gap:4px;align-items:center;font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2)}
 .btn{font:inherit;font-weight:600;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);padding:8px 14px;border-radius:8px;cursor:pointer}
@@ -133,7 +139,7 @@ td{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-
 
   <div class="panel" style="margin-top:16px">
     <div class="head"><h3>Session log</h3></div>
-    <div class="tablewrap"><table><thead><tr><th>Started</th><th>Status</th><th>Pain before → after</th><th>Valid / attempted</th><th>Accuracy</th><th>Mean angle error</th><th>Points</th><th>Stars</th><th>Input</th></tr></thead><tbody id="log"></tbody></table></div>
+    <div class="tablewrap"><table><thead><tr><th>Started</th><th>Status</th><th>Clinical notes (therapist)</th><th>Valid / attempted</th><th>Accuracy</th><th>Mean angle error</th><th>Points</th><th>Stars</th><th>Input</th></tr></thead><tbody id="log"></tbody></table></div>
   </div>
 </div>
 <script>
@@ -164,15 +170,40 @@ function render(){
   $("kLvl").textContent="LV "+p.level; $("kLvlS").textContent=`${p.xp} XP · ${p.badges.length} badges`;
   $("cal").innerHTML=data.calendar.map(d=>{ const dt=new Date(d.date+"T00:00"); return `<div class="day ${d.status}" title="${d.date}: ${d.status}">${DOW[d.dow]}<b>${dt.getDate()}</b></div>`; }).join("");
   $("exBody").innerHTML=data.byExercise.map(e=>`<tr><td>${e.name}</td><td>${e.n}</td><td>${e.n?e.accuracy+"%":"–"}</td><td>${e.n?e.mean_err+"°":"–"}</td><td${e.unsafe?' style="color:var(--bad);font-weight:600"':""}>${e.n?e.unsafe+" reps":"–"}</td></tr>`).join("");
-  $("log").innerHTML=data.sessions.length? data.sessions.map(s=>`<tr><td class="mono">${s.started_at.replace("T"," ").slice(0,16)}</td><td><span class="pill ${s.status}">${s.status}</span></td><td>${painCell(s)}</td><td>${s.valid} / ${s.attempts}</td><td>${s.accuracy}%</td><td>${s.mean_err}°</td><td>${s.points}</td><td>${"★".repeat(s.stars)||"–"}</td><td>${s.input_source||""}</td></tr>`).join("")
+  if(editing==null) $("log").innerHTML=data.sessions.length? data.sessions.map(s=>`<tr><td class="mono">${s.started_at.replace("T"," ").slice(0,16)}</td><td><span class="pill ${s.status}">${s.status}</span></td><td data-clin="${s.session_id}">${clinCell(s)}</td><td>${s.valid} / ${s.attempts}</td><td>${s.accuracy}%</td><td>${s.mean_err}°</td><td>${s.points}</td><td>${"★".repeat(s.stars)||"–"}</td><td>${s.input_source||""}</td></tr>`).join("")
     : `<tr><td colspan="9" class="hint">No sessions yet. Run one in the Unity app.</td></tr>`;
   renderChart(); renderRx(); renderPhase();
 }
-function painCell(s){
-  if(s.pain_before==null||s.pain_after==null) return '<span class="hint">–</span>';
-  const up=s.pain_after-s.pain_before;
-  return `<span class="${up>2?"painup":""}">${s.pain_before} → ${s.pain_after}${up>2?` (+${up})`:""}</span>`;
+// Pain, soreness and swelling are recorded by the therapist here, not by the patient in VR.
+let editing=null;
+function clinCell(s){
+  const parts=[];
+  if(s.pain_before!=null&&s.pain_after!=null){
+    const up=s.pain_after-s.pain_before;
+    parts.push(`<span class="${up>2?"painup":""}">pain ${s.pain_before} → ${s.pain_after}${up>2?` (+${up})`:""}</span>`);
+  }
+  if(s.soreness_over_2h!=null) parts.push(`<span class="${s.soreness_over_2h?"painup":""}">soreness ${s.soreness_over_2h?"over":"under"} 2 h</span>`);
+  if(s.swelling_cm!=null) parts.push(`<span class="${s.swelling_cm>=2?"painup":""}">swelling +${s.swelling_cm} cm</span>`);
+  return `<div class="clin">${parts.join(" · ")||'<span class="hint">not recorded</span>'} <button class="btn ghost sm" type="button" data-edit="${s.session_id}">${parts.length?"Edit":"Record"}</button></div>`;
 }
+function clinEditor(s){
+  const v=x=>x==null?"":x;
+  return `<div class="clin">Pain <input type="number" id="cpb" min="0" max="10" value="${v(s.pain_before)}" title="Pain before, 0-10">→<input type="number" id="cpa" min="0" max="10" value="${v(s.pain_after)}" title="Pain after, 0-10">
+    <select id="cso" title="Soreness after exercise"><option value="">soreness –</option><option value="0" ${s.soreness_over_2h===0?"selected":""}>under 2 h</option><option value="1" ${s.soreness_over_2h===1?"selected":""}>over 2 h</option></select>
+    swelling <input type="number" id="csw" min="0" max="20" step="0.5" value="${v(s.swelling_cm)}" title="Swelling increase, cm"> cm
+    <button class="btn sm" type="button" data-save="${s.session_id}">Save</button><button class="btn ghost sm" type="button" data-cancel="1">Cancel</button></div>`;
+}
+$("log").addEventListener("click",async ev=>{
+  const t=ev.target, s=k=>data.sessions.find(x=>x.session_id===+k);
+  if(t.dataset.edit){ editing=+t.dataset.edit; document.querySelector(`[data-clin="${editing}"]`).innerHTML=clinEditor(s(editing)); }
+  else if(t.dataset.cancel){ editing=null; render(); }
+  else if(t.dataset.save){
+    const val=id=>$(id).value===""?null:+$(id).value;
+    try{ await api(`/api/sessions/${t.dataset.save}/clinical`,{method:"PUT",headers:{"Content-Type":"application/json"},
+           body:JSON.stringify({pain_before:val("cpb"),pain_after:val("cpa"),soreness_over_2h:val("cso"),swelling_cm:val("csw")})});
+         editing=null; await load(); }catch(e){ showErr(e); }
+  }
+});
 const esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let protocols=[];
 function renderPhase(){
@@ -180,7 +211,8 @@ function renderPhase(){
   $("phaseInfo").innerHTML= ph.id
     ? `<div style="font-weight:600">${esc(ph.protocol)} · ${esc(ph.name)} <span class="hint">(${esc(ph.weeks)})</span></div>
        <dl><dt>Since</dt><dd class="mono">${esc(ph.startedAt.replace("T"," ").slice(0,16))}</dd>
-       <dt>Goals</dt><dd>${esc(ph.goals)}</dd><dt>Precautions</dt><dd>${esc(ph.precautions)}</dd>
+       <dt>Goals</dt><dd>${esc(ph.goals)}</dd>${ph.romGoal?`<dt>ROM goal</dt><dd>${esc(ph.romGoal)}</dd>`:""}<dt>Precautions</dt><dd>${esc(ph.precautions)}</dd>
+       ${ph.other?`<dt>Without camera</dt><dd>${esc(ph.other)}</dd>`:""}
        ${ph.vrAllowed?"":`<dt>VR</dt><dd style="color:var(--warn)">Not for VR. This phase is done with the therapist, so the patient has no TheraQuest session.</dd>`}</dl>`
     : `<p class="hint">No protocol assigned. The patient follows the custom prescription below.</p>`;
   if(!r){ $("ready").innerHTML='<p class="hint">Assign a protocol phase to see progression suggestions.</p>'; }
@@ -190,7 +222,8 @@ function renderPhase(){
     if(!r.next) box=`<p class="hint">This is the final phase of the protocol.</p>`;
     else if(r.ready) box=`<div class="suggest"><span><b>Ready for ${esc(r.next.name)}?</b><div class="hint">All criteria met. Check the patient before approving.</div></span>
          <button class="btn" type="button" id="approveBtn" data-phase="${r.next.id}">Approve: move to ${esc(r.next.name)}</button></div>`;
-    else box=`<p class="hint">${r.note?esc(r.note)+" ":""}Not suggesting ${esc(r.next.name)} (${esc(r.next.weeks)}) yet. You can still move the patient on with the selector on the left.</p>`;
+    else box=`<p class="hint">${r.note?esc(r.note)+" ":""}Not suggesting ${esc(r.next.name)} (${esc(r.next.weeks)}) yet. You can still move the patient on with the selector on the left.</p>`
+      +(r.criteria.some(c=>/not recorded/.test(c.detail))?`<p class="hint">Record pain, soreness and swelling for each session in the session log below.</p>`:"");
     $("ready").innerHTML=list+box;
   }
   const hist=data.phaseHistory.map(h=>`<li><span class="mono">${esc(h.changed_at.replace("T"," ").slice(0,16))}</span> · ${h.phase?esc(h.protocol)+" · "+esc(h.phase):"Custom program"}${h.note?" · "+esc(h.note):""}</li>`).join("");
@@ -247,11 +280,11 @@ function renderRx(){
   if($("rx").contains(document.activeElement)) return;
   $("rx").innerHTML=`<div class="add"><select id="addSel">${library.map(l=>`<option value="${l.code}">${l.joint} · ${l.name} (${VIEW[l.view]})</option>`).join("")}</select>
      <button class="btn ghost" type="button" id="addBtn">Add exercise</button></div>`
-   +data.exercises.map(e=>`<div class="rxrow"><div class="nm"><span>${e.name}<div class="hint">${e.position} · ${VIEW[e.view]||""} · stage ${e.stage}, ${e.reps} reps now</div></span>
+   +data.exercises.map(e=>`<div class="rxrow"><div class="nm"><span>${e.name}<div class="hint">${e.position} · ${VIEW[e.view]||""} · stage ${e.stage}, ${e.reps} reps now</div>${e.normalRom?`<div class="hint ${(e.targetAngle>e.normalMax||e.safetyMax>e.normalMax)?"warnrom":""}">Normal ROM: ${e.normalRom}${(e.targetAngle>e.normalMax||e.safetyMax>e.normalMax)?" · target or safety max is past normal":""}</div>`:""}</span>
       <button class="link" type="button" data-remove="${e.id}">Remove</button></div>
     <div class="rxfields">${RX.map(([k,lbl,lo,hi])=>`<label>${lbl}<input type="number" id="${k}${e.id}" min="${lo}" max="${hi}" value="${k==="reps"?e.baseReps:e[k]}"></label>`).join("")}
       <label>Side<select id="side${e.id}">${[["","Auto"],["L","Left"],["R","Right"]].map(([v,t])=>`<option value="${v}" ${e.side===v?"selected":""}>${t}</option>`).join("")}</select></label></div></div>`).join("")
-   +`<p class="hint">Safety max 0 = no limit. Hold 0 = no hold. The numbers are placeholders until your physical therapist sets them.</p>
+   +`<p class="hint">Safety max 0 = no limit. Hold 0 = no hold. Normal ROM values: AAOS, as tabulated in Norkin &amp; White. Have your physical therapist confirm every number.</p>
      <div class="label">Scheduled days</div><div class="days">${DOW.map((d,i)=>`<label><input type="checkbox" id="d${i}" ${data.program.days.includes(i)?"checked":""}> ${d}</label>`).join("")}</div>
      <label class="hint" style="display:flex;gap:8px;align-items:center;margin-bottom:12px">Max reps after level-ups <input type="number" id="maxReps" min="1" max="50" value="${data.program.maxReps}" style="width:70px"></label>
      <button class="btn" type="submit">Save prescription</button> <span class="hint" id="rxMsg"></span>`;
@@ -271,7 +304,7 @@ $("rx").addEventListener("click",async ev=>{
   try{ await api(...req); t.blur(); await load(); }catch(e){ showErr(e); }
 });
 api("/api/library").then(l=>{ library=l; if(data) renderRx(); }).catch(()=>{});
-init(); setInterval(()=>{ if(pid && !$("rx").contains(document.activeElement)) load(); }, 10000);
+init(); setInterval(()=>{ if(pid && editing==null && !$("rx").contains(document.activeElement)) load(); }, 10000);
 </script>
 </body>
 </html>

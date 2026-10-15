@@ -92,17 +92,47 @@ Use good lighting, keep 2–3 m away, and don't stand in front of a window.
    This builds the room, the coach figure, the HUD and all the managers, and connects everything.
 4. Press **Play**. You'll see the scene on the laptop screen (desktop mode).
 
+You don't need to run **Create Scene** again after updating the scripts: the menu, music, subtitles,
+clinic room and walking are added automatically when you press Play.
+
+**Playing**
+
+Press Play and the **main menu** opens in front of you:
+- **Start today's quest** brings you to the exercise spot and starts the session.
+- **Explore the clinic** lets you walk around the room.
+- **Coach** and **Guide** choose the avatar and how it guides you.
+- **Settings** has music volume, effects volume, subtitles on/off and size, motion input, snap or smooth turning, and walking speed. Settings are saved.
+- **Settings → Show numbers (therapist)** switches the HUD from the simple patient view to one with degrees, accuracy % and tracker details. The patient view uses a power meter (green zone, ★ at the target, red STOP line), rep dots and friendly coach lines. The dashboard always has the full data.
+
+During a session, **Esc / B pauses** the exercise. The pause menu can resume, take you back to the exercise spot, open Settings, or end the session and save it.
+**Subtitles** at the bottom of your view caption the coach's instructions and every sound cue, for example *[Perfect chime] Perfect! 97%*.
+
 **Controls**
 
-| Action | Keyboard | Quest controller |
+| Action | Keyboard / mouse | Quest controller |
 |---|---|---|
-| Start session / continue | Space | A or right trigger |
-| End session early | Esc | B |
-| Switch input: webcam → keyboard → simulated | Tab | X |
-| Move limb (keyboard mode) | Up / Down | Right thumbstick |
-| Recenter view | R | Y |
+| Start / select | Space or Enter | A or right trigger |
+| Pause / menu / back | Esc, P or Backspace | B, or Menu (left) |
+| Menu: choose / change value | Arrow keys (the mouse can click too) | Either thumbstick |
+| Walk | W A S D (Shift = faster) | Left thumbstick |
+| Turn / look around | Q / E, Left / Right, or hold the right mouse button | Right thumbstick (snap 30° or smooth) |
+| Back to the exercise spot | R | Y |
+| Switch input: webcam → keyboard → simulated | Tab (or Settings) | X |
+| Move limb (keyboard input mode) | Up / Down | Right thumbstick up / down |
 
-Try **Tab** twice to reach "simulated" mode, then press **Space**. The full session runs by itself, including made-up pain scores, then uploads to the dashboard.
+To watch a full session without the camera, choose **Settings → Motion input → simulated**, go back, then **Start today's quest**. The session runs by itself and uploads to the dashboard.
+
+**Coach characters and Mixamo**
+
+The coach can be any Humanoid character. Characters in a `Coaches` folder (for example `Assets/ThirdParty/Coaches`) are set up automatically: Humanoid rig and smooth shading. The game camera also uses anti-aliasing (SMAA) for smooth edges. In the editor, keep the Game view **Scale at 1x**, because a lower scale makes everything look pixelated.
+
+To use characters and animations from [Mixamo](https://www.mixamo.com/) (free with an Adobe account):
+1. **Characters:** pick a character, then Download → Format **FBX for Unity (.fbx)**, Pose **T-pose**. Put the file in `Assets/ThirdParty/Coaches/`.
+2. **Idle animation (recommended):** search for **"Breathing Idle"**, then Download → **FBX for Unity**, **Without Skin**. Put it in `Assets/ThirdParty/CoachAnimations/`. It's imported as a looping Humanoid clip and becomes the coach's resting animation, so the limbs that aren't exercising breathe and shift weight like a real person.
+3. Run **TheraQuest → Create Scene** again. Each character in `Coaches` becomes a choice under **Main menu → Coach**. The idle clip is also picked up automatically by an existing scene.
+4. If a Mixamo character looks white or untextured, select the FBX → Inspector → **Materials → Extract Textures**.
+
+The exercise movements are still driven by the tracker angles, so they work with every character.
 
 ## 5. Show it in the Quest (Quest Link)
 
@@ -128,19 +158,34 @@ Without the headset connected, the same Play button falls back to desktop mode.
    - Points, combo, badges and stars appear in the HUD. Feedback appears in the banner with tones.
 5. When the session finishes, refresh the dashboard. You'll see the session, its accuracy, the adherence calendar and any stage-up.
 
-## 7. Protocols, phases and pain check-in
+## 7. Protocols, phases and clinical notes
 
 Rehab protocols are stored as **Protocol → Phases → Exercises** (tables `protocol`, `protocol_phase`, `phase_exercise`).
-Two example protocols are loaded on first start: **Total knee replacement** (3 phases) and **Rotator cuff repair, large to massive** (4 phases).
-Their numbers are **placeholders** that follow the structure of the published protocols. Replace them with your partner PT's protocol (`PROTOCOLS` in `server.py`, or edit the tables) and get their sign-off.
+Two protocols are loaded from the published documents (`PROTOCOLS` in `server.py`):
 
-- **Assign a phase** on the dashboard (Protocol & phase panel). Its exercises replace the prescription, and the therapist can still change any value. "Custom program" leaves the exercises as they are, with no protocol.
-- **Phases marked "not for VR"** (immobilization, passive motion) have no exercises. Unity shows "done with your therapist" and won't start a session. TheraQuest is only for patients cleared for active exercise; put this in Scope and Limitations.
-- **Pain check-in:** before and after every session, the patient picks 0–10 with Left / Right (or the thumbstick) and presses Start. A score of 7 or more before the session shows a caution first. The dashboard's session log shows "before → after" and highlights increases over 2.
-- **Progression check:** the dashboard checks the most recent 3 complete sessions in the phase. Each must have every exercise at ≥ 85% accuracy, pain up by 2 points or less, and no reps past the safety limit. When everything is met it shows **"Ready for Phase II?"**, and nothing changes until the therapist presses **Approve**. These thresholds are columns on `protocol_phase` (`min_sessions`, `min_accuracy`, `max_pain_increase`).
-- Every phase change is logged in `phase_history`.
+| Protocol | Phases | Tracked in VR (single webcam) |
+|---|---|---|
+| **OHSU Health Total Knee Best Practice Rehab Guideline** (HC-REH-400.30.3, Nov 2023) | I Immediate post-op · II Motion and mobility · III Intermediate · IV Advanced strengthening · V Return to activities (no VR) | Heel slides, LAQ / seated knee extension, mini squats, side-lying hip abduction, SLR, standing hamstring curls, standing hip abduction and extension, sit to stand, marching, mini lunges, wall slides to 90° (5 s holds in Phase IV) |
+| **Mass General Brigham, Arthroscopic Rotator Cuff Repair, Large to Massive Tears** | I Immobilization (no VR) · II Passive ROM (no VR) · III AAROM then AROM · IV Initial strengthening · V Advanced strengthening · VI Return to sport (no VR) | Supine cane flexion, wall slide, active forward reach, active shoulder elevation, straight-arm shoulder extension, biceps curls, full can (scaption), wall push-ups |
 
-Not measured: how long soreness lasts after a session (the protocols use "under 2 hours"). The patient is told to report it.
+- Phase names, time frames, goals, precautions, ROM goals and progression rules follow the documents. Each phase also lists the protocol's exercises that **can't be tracked with one camera** (quad sets, ankle pumps, isometrics, shoulder rotation, bike, manual therapy and so on) under "Without camera" on the dashboard.
+- MGB Phase IV forbids straight-arm lateral raises, so shoulder abduction isn't in that phase.
+- The documents don't give angles or reps for most exercises. Targets come from the phase ROM goals where the document has them. Sets × reps use OHSU's "2×8" rule. Safety limits are starting points. **Have your physical therapist confirm every number.**
+- **Normal ROM** for each exercise (AAOS values as tabulated in **Norkin & White, *Measurement of Joint Motion: A Guide to Goniometry***) is shown next to the prescription. The dashboard warns when a target or safety max goes past it.
+- Updating from an older version replaces the earlier example protocols. Patients on an old phase keep their exercises as a custom program.
+
+**Using it**
+
+- **Assign a phase** on the dashboard (Protocol & phase panel). Its exercises replace the prescription, and the therapist can still change any value.
+- **Phases marked "not for VR"** (immobilization, passive motion, return to sport) have no VR session. TheraQuest is only for patients cleared for active exercise; put this in Scope and Limitations.
+- **Clinical notes are recorded by the therapist, not the patient.** In the session log, **Record** opens fields for pain before → after (0–10), soreness (under / over 2 hours) and swelling increase (cm).
+- **Progression check:** the dashboard looks at the most recent 3 complete sessions in the phase and checks the protocol's criteria:
+  - every exercise at ≥ 85% accuracy (the ROM goal)
+  - pain up by no more than 2 points (OHSU) or no increase in pain (MGB)
+  - soreness gone within 2 hours and swelling up by less than 2 cm (OHSU)
+  - no reps past the safety limit
+
+  When everything is met it shows **"Ready for Phase II?"**. Nothing changes until the therapist presses **Approve**, and every phase change is logged in `phase_history`.
 
 ## 8. How the rules work (keep these consistent with Chapter 3)
 

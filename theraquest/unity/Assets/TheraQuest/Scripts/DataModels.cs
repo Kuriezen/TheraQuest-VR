@@ -109,6 +109,7 @@ namespace TheraQuest
         public bool vrAllowed = true;   // false = immobilization / passive phase, done with the therapist
         public string goals = "";
         public string precautions = "";
+        public string romGoal = "";
     }
 
     [Serializable]
@@ -146,8 +147,6 @@ namespace TheraQuest
         public string input_source;
         public int points;
         public int stars;
-        public int pain_before = -1;    // 0-10 check-in; -1 = skipped
-        public int pain_after = -1;
         public List<string> badges_earned = new List<string>();
         public List<ExerciseResult> exercises = new List<ExerciseResult>();
     }
